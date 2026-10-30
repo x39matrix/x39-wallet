@@ -469,10 +469,146 @@ fn servidor_de_otra_red_rechazado() {
         b.difundir(&sim.url, &e.txid).unwrap_err(),
         Error::RedServidor(_)
     ));
-    assert_eq!(
-        b.estado_envio(&e.txid).unwrap().estado,
-        EstadoEnvio::Firmada
+    let e = b.estado_envio(&e.txid).unwrap();
+    assert_eq!(e.estado, EstadoEnvio::Firmada);
+    assert_eq!(e.intentos_difusion, 0, "no conectar no cuenta como intento");
+    assert!(e.puede_cancelar, "nunca salió del aparato");
+}
+
+#[test]
+fn regtest_corte_entre_transmitir_y_anotar_deja_incierta() {
+    // Se anota el inicio del intento (Difundiendo) y el proceso "muere" antes de anotar el
+    // resultado: al reabrir es incierta con el intento contado; nunca "nunca difundida".
+    let dir = tempfile::tempdir().unwrap();
+    let sim = Simulado::arrancar(Network::Regtest);
+    let f = dir.path().join("b.dat");
+    let (txid, cambio_sat) = {
+        let mut b = billetera_regtest(dir.path(), &sim);
+        let e = firmar_40k(&mut b);
+        b.envios.iniciar_difusion(&e.txid, ahora_s()).unwrap();
+        assert_eq!(
+            b.estado_envio(&e.txid).unwrap().estado,
+            EstadoEnvio::Difundiendo
+        );
+        assert!(b.envio_en_curso().is_some());
+        (e.txid, e.cambio_sat)
+    };
+    let txt = std::fs::read_to_string(envios::Registro::ruta_de(&f)).unwrap();
+    assert!(
+        txt.contains("Difundiendo"),
+        "el estado intermedio está en disco"
     );
+    let mut b = Billetera::abrir(&f, Red::Regtest).unwrap();
+    b.fijar_espera(Duration::from_secs(1));
+    let e = b.estado_envio(&txid).unwrap();
+    assert_eq!(e.estado, EstadoEnvio::Incierta);
+    assert!(e.motivo.contains("interrumpida"), "{}", e.motivo);
+    assert_eq!(e.intentos_difusion, 1, "el intento cuenta");
+    assert!(!e.puede_cancelar && e.puede_reemplazar && e.puede_reintentar);
+    assert_eq!(b.saldo().total, cambio_sat, "monedas gastadas");
+    assert!(matches!(b.cancelar(&txid).unwrap_err(), Error::Envio(_)));
+    assert!(matches!(
+        b.preparar_psbt(&destino_regtest(), 1_000, 1.0, 1_000)
+            .unwrap_err(),
+        Error::EnvioEnCurso(_)
+    ));
+    // Reintentar la misma funciona y cuenta el segundo intento.
+    let e = b.difundir(&sim.url, &txid).unwrap();
+    assert_eq!((e.estado, e.intentos_difusion), (EstadoEnvio::Enviada, 2));
+}
+
+#[test]
+fn regtest_rechazo_en_un_reintento_no_libera() {
+    // Primer intento colgado (incierta), segundo rechazado con un texto genérico: el
+    // rechazo de ahora no demuestra que el primero no llegara → incierta, sin liberar.
+    for texto in ["bad-txns-inputs-missingorspent", "error interno"] {
+        let dir = tempfile::tempdir().unwrap();
+        let sim = Simulado::arrancar(Network::Regtest);
+        let mut b = billetera_regtest(dir.path(), &sim);
+        let e = firmar_40k(&mut b);
+        sim.fijar_difusion(Difusion::Colgar(Duration::from_secs(4)));
+        let e = b.difundir(&sim.url, &e.txid).unwrap();
+        assert_eq!((e.estado, e.intentos_difusion), (EstadoEnvio::Incierta, 1));
+        sim.fijar_difusion(Difusion::Rechazar(1, texto.into()));
+        let e = b.difundir(&sim.url, &e.txid).unwrap();
+        assert_eq!(e.estado, EstadoEnvio::Incierta, "{texto}");
+        assert_eq!(e.intentos_difusion, 2);
+        assert!(
+            e.motivo.starts_with("rechazada:") && e.motivo.contains("no se liberan monedas"),
+            "{}",
+            e.motivo
+        );
+        assert_eq!(b.saldo().total, e.cambio_sat, "saldo sin liberar ({texto})");
+        assert_eq!(b.saldo().confirmado, 0);
+        assert!(!e.puede_cancelar && e.puede_reemplazar);
+        assert!(b.envio_en_curso().is_some());
+    }
+}
+
+#[test]
+fn regtest_rechazo_en_el_primer_intento_no_libera() {
+    for texto in ["bad-txns-inputs-missingorspent", "error interno"] {
+        let dir = tempfile::tempdir().unwrap();
+        let sim = Simulado::arrancar(Network::Regtest);
+        let mut b = billetera_regtest(dir.path(), &sim);
+        let e = firmar_40k(&mut b);
+        sim.fijar_difusion(Difusion::Rechazar(1, texto.into()));
+        let e = b.difundir(&sim.url, &e.txid).unwrap();
+        assert_eq!(
+            (e.estado, e.intentos_difusion),
+            (EstadoEnvio::Incierta, 1),
+            "{texto}"
+        );
+        assert_eq!(b.saldo().total, e.cambio_sat, "saldo reservado ({texto})");
+        assert_eq!(b.saldo().confirmado, 0);
+        assert!(e.puede_reemplazar && e.puede_reintentar && !e.puede_cancelar);
+        assert!(b.envio_en_curso().is_some());
+    }
+}
+
+#[test]
+fn regtest_el_intento_esta_en_disco_antes_de_transmitir() {
+    // Por el camino real: el simulado, al recibir la transacción, lee el fichero de envíos
+    // tal como está en ese instante. Debe contener ya Difundiendo e intentos_difusion = 1.
+    for despues in [Difusion::Aceptar, Difusion::Colgar(Duration::from_secs(3))] {
+        let dir = tempfile::tempdir().unwrap();
+        let sim = Simulado::arrancar(Network::Regtest);
+        let f = dir.path().join("b.dat");
+        let mut b = billetera_regtest(dir.path(), &sim);
+        let e = firmar_40k(&mut b);
+        let colgado = matches!(despues, Difusion::Colgar(_));
+        sim.fijar_difusion(Difusion::LeerAlRecibir(
+            envios::Registro::ruta_de(&f),
+            Box::new(despues),
+        ));
+        let e = b.difundir(&sim.url, &e.txid).unwrap();
+        assert_eq!(
+            e.estado,
+            if colgado {
+                EstadoEnvio::Incierta
+            } else {
+                EstadoEnvio::Enviada
+            }
+        );
+        let capturas = sim.capturas();
+        assert!(
+            !capturas.is_empty(),
+            "el simulado leyó el fichero al recibir la transacción"
+        );
+        let json: serde_json::Value = serde_json::from_str(&capturas[0]).unwrap();
+        let apunte = json["envios"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["info"]["txid"] == e.txid)
+            .expect("la transacción estaba en el fichero");
+        assert_eq!(
+            apunte["info"]["estado"], "Difundiendo",
+            "anotada antes de que el servidor responda"
+        );
+        assert_eq!(apunte["info"]["intentos_difusion"], 1);
+        assert_eq!(json["version"], 3);
+    }
 }
 
 #[test]
@@ -746,7 +882,9 @@ fn regtest_difusion_aceptada_y_confirmada() {
 }
 
 #[test]
-fn regtest_rechazo_explicito_libera_las_monedas() {
+fn regtest_rechazo_explicito_no_libera_las_monedas() {
+    // Un rechazo del servidor no demuestra que la transacción no circule (puede haberla
+    // pasado al nodo y fallar después): incierta, monedas reservadas, reintento o reemplazo.
     let dir = tempfile::tempdir().unwrap();
     let sim = Simulado::arrancar(Network::Regtest);
     let mut b = billetera_regtest(dir.path(), &sim);
@@ -758,35 +896,31 @@ fn regtest_rechazo_explicito_libera_las_monedas() {
         "rechazada por las reglas de la red".into(),
     ));
     let e = b.difundir(&sim.url, &e.txid).unwrap();
-    assert_eq!(e.estado, EstadoEnvio::Fallida);
-    assert!(e.motivo.contains("rechazada"), "{}", e.motivo);
-    assert!(!e.puede_reintentar && !e.puede_cancelar);
-    assert_eq!(b.saldo().confirmado, FONDOS, "monedas liberadas");
-    assert!(b.envio_en_curso().is_none());
+    assert_eq!(e.estado, EstadoEnvio::Incierta);
+    assert_eq!(e.intentos_difusion, 1);
+    assert!(
+        e.motivo.starts_with("rechazada:") && e.motivo.contains("no se liberan monedas"),
+        "{}",
+        e.motivo
+    );
+    assert!(e.puede_reintentar && e.puede_reemplazar && !e.puede_cancelar);
+    assert_eq!(b.saldo().total, e.cambio_sat, "monedas reservadas");
+    assert_eq!(b.saldo().confirmado, 0);
+    assert!(b.envio_en_curso().is_some());
     assert!(sim.difundidas().is_empty());
-    // No se reintenta una fallida; se prepara otra.
-    assert!(matches!(
-        b.difundir(&sim.url, &e.txid).unwrap_err(),
-        Error::Envio(_)
-    ));
     assert!(matches!(b.cancelar(&e.txid).unwrap_err(), Error::Envio(_)));
-    sim.fijar_difusion(Difusion::Aceptar);
-    let e2 = firmar_40k(&mut b);
-    assert_ne!(
-        e2.txid, e.txid,
-        "otra dirección de cambio, otra transacción"
-    );
-    assert_eq!(
-        b.difundir(&sim.url, &e2.txid).unwrap().estado,
-        EstadoEnvio::Enviada
-    );
-    // Tras sincronizar, la fallida sigue fallida y fuera del saldo.
+    assert!(matches!(
+        b.preparar_psbt(&destino_regtest(), 1_000, 1.0, 1_000)
+            .unwrap_err(),
+        Error::EnvioEnCurso(_)
+    ));
+    // Sincronizar no la libera; el reintento de la misma, cuando el servidor acepta, llega.
     b.sincronizar(&sim.url).unwrap();
-    assert_eq!(
-        b.estado_envio(&e.txid).unwrap().estado,
-        EstadoEnvio::Fallida
-    );
-    assert_eq!(b.saldo().total, e2.cambio_sat);
+    assert_eq!(b.saldo().total, e.cambio_sat);
+    sim.fijar_difusion(Difusion::Aceptar);
+    let e = b.difundir(&sim.url, &e.txid).unwrap();
+    assert_eq!((e.estado, e.intentos_difusion), (EstadoEnvio::Enviada, 2));
+    assert_eq!(sim.difundidas(), vec![Txid::from_str(&e.txid).unwrap()]);
 }
 
 #[test]
@@ -871,7 +1005,7 @@ fn regtest_ya_conocida_es_exito_y_no_libera() {
         assert!(sim.difundidas().is_empty());
         assert!(b.envio_en_curso().is_none(), "enviada: no bloquea");
     }
-    // Un rechazo de verdad con código 1 sigue siendo rechazo.
+    // Un rechazo de verdad con código 1 no es "ya conocida": incierta, sin liberar.
     let dir = tempfile::tempdir().unwrap();
     let sim = Simulado::arrancar(Network::Regtest);
     let mut b = billetera_regtest(dir.path(), &sim);
@@ -880,11 +1014,10 @@ fn regtest_ya_conocida_es_exito_y_no_libera() {
         1,
         "bad-txns-inputs-missingorspent".into(),
     ));
-    assert_eq!(
-        b.difundir(&sim.url, &e.txid).unwrap().estado,
-        EstadoEnvio::Fallida
-    );
-    assert_eq!(b.saldo().confirmado, FONDOS);
+    let e = b.difundir(&sim.url, &e.txid).unwrap();
+    assert_eq!(e.estado, EstadoEnvio::Incierta);
+    assert!(!e.motivo.contains("ya la conocía"));
+    assert_eq!(b.saldo().total, e.cambio_sat);
 }
 
 /// Billetera con DOS depósitos confirmados y un envío que gasta los dos, firmado y con
@@ -1071,14 +1204,14 @@ fn regtest_cancelada_que_aparece_en_un_bloque_pasa_a_confirmada() {
         e.cambio_sat,
         "el registro y el saldo dicen lo mismo que la red"
     );
-    // Y una fallida que se confirma, igual.
+    // Y una rechazada (incierta) que luego se confirma pasa a confirmada.
     let dir2 = tempfile::tempdir().unwrap();
     let sim2 = Simulado::arrancar(Network::Regtest);
     let mut b2 = billetera_regtest(dir2.path(), &sim2);
     let f = firmar_40k(&mut b2);
     sim2.fijar_difusion(Difusion::Rechazar(1, "rechazada".into()));
     let f = b2.difundir(&sim2.url, &f.txid).unwrap();
-    assert_eq!(f.estado, EstadoEnvio::Fallida);
+    assert_eq!(f.estado, EstadoEnvio::Incierta);
     sim2.fijar_difusion(Difusion::Aceptar);
     let tx = tx_de(&b2, &f.txid);
     sim2.registrar_tx(&tx, 0);
@@ -1086,7 +1219,7 @@ fn regtest_cancelada_que_aparece_en_un_bloque_pasa_a_confirmada() {
     b2.sincronizar(&sim2.url).unwrap();
     let f = b2.estado_envio(&f.txid).unwrap();
     assert_eq!(f.estado, EstadoEnvio::Confirmada);
-    assert!(f.motivo.contains("pese al rechazo"), "{}", f.motivo);
+    assert!(b2.envio_en_curso().is_none());
     assert_eq!(b2.saldo().confirmado, f.cambio_sat);
 }
 

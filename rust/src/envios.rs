@@ -5,16 +5,22 @@
 //!
 //! * `Firmada`: firmada y aplicada localmente como no confirmada (las monedas quedan
 //!   gastadas en la billetera) ANTES de intentar difundirla. Todavía no se ha enviado.
+//! * `Difundiendo`: se anota (y persiste) justo ANTES de transmitirla, con el intento ya
+//!   contado. Si el proceso muere entre transmitir y anotar el resultado, al reabrir pasa a
+//!   `Incierta` ("interrumpida durante la difusión"): nunca puede figurar como nunca
+//!   difundida. Un fallo al conectar no llega a este estado y no cuenta como intento.
 //! * `Enviada`: el servidor aceptó la difusión (o ya la conocía), o la ha visto en una
 //!   sincronización.
-//! * `Fallida`: el servidor la RECHAZÓ explícitamente. Las monedas se liberan.
-//! * `Incierta`: la difusión no obtuvo respuesta (timeout, conexión perdida). No se sabe
-//!   si llegó. NUNCA se reconstruye otra transacción con esas monedas: se reintenta la
-//!   MISMA transacción firmada o se la REEMPLAZA (ver abajo).
+//! * `Incierta`: la difusión no obtuvo respuesta (timeout, conexión perdida) O el servidor
+//!   la rechazó. NINGÚN rechazo libera monedas: el servidor puede haber pasado la
+//!   transacción al nodo y fallar después, y un rechazo no demuestra que no circule. No se
+//!   sabe si llegó. NUNCA se reconstruye otra transacción con esas monedas: se reintenta
+//!   la MISMA transacción firmada o se la REEMPLAZA (ver abajo).
+//! * `Fallida`: solo para un reemplazo cuya original se confirmó ("reemplazo perdido").
 //! * `Confirmada`: vista en un bloque. También si antes se había dado por cancelada o
 //!   rechazada: el registro no puede llamar cancelada a lo que la red confirmó.
-//! * `Cancelada`: o bien nunca salió del aparato y el usuario la canceló (monedas
-//!   liberadas), o bien su REEMPLAZO se confirmó.
+//! * `Cancelada`: o bien nunca salió del aparato y el usuario la canceló (la ÚNICA
+//!   liberación automática de monedas que existe), o bien su REEMPLAZO se confirmó.
 //!
 //! Cancelar algo que ha tocado un servidor NO es liberar las monedas: no se sabe si la
 //! transacción está ya en la red, y gastar esas monedas en otra cosa sería pagar dos
@@ -32,14 +38,18 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-/// Versión del fichero lateral. La 1 (misma estructura, solo motores de prueba
-/// anteriores a esta versión) se lee y se vuelve a guardar como 2.
-const VERSION_FICHERO: u32 = 2;
-const VERSIONES_LEGIBLES: [u32; 2] = [1, 2];
+/// Versión del fichero lateral: se sube cuando cambia la estructura o el significado de los
+/// estados. Las anteriores (solo motores de prueba) se leen y se vuelven a guardar como la
+/// actual.
+const VERSION_FICHERO: u32 = 3;
+/// Limitación: leer las versiones 1 y 2 no reinterpreta sus estados antiguos; una `Fallida`
+/// histórica por rechazo (solo pudo producirla el laboratorio) se carga tal cual.
+const VERSIONES_LEGIBLES: [u32; 3] = [1, 2, 3];
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EstadoEnvio {
     Firmada,
+    Difundiendo,
     Enviada,
     Fallida,
     Incierta,
@@ -51,6 +61,7 @@ impl std::fmt::Display for EstadoEnvio {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             EstadoEnvio::Firmada => "firmada",
+            EstadoEnvio::Difundiendo => "difundiendo",
             EstadoEnvio::Enviada => "enviada",
             EstadoEnvio::Fallida => "fallida",
             EstadoEnvio::Incierta => "difusión incierta",
@@ -109,7 +120,10 @@ impl EnvioInfo {
     fn abierta(&self) -> bool {
         matches!(
             self.estado,
-            EstadoEnvio::Firmada | EstadoEnvio::Enviada | EstadoEnvio::Incierta
+            EstadoEnvio::Firmada
+                | EstadoEnvio::Difundiendo
+                | EstadoEnvio::Enviada
+                | EstadoEnvio::Incierta
         )
     }
 }
@@ -165,7 +179,35 @@ impl Registro {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
             Err(e) => return Err(fichero_err(e)),
         };
-        Ok(Registro { ruta, envios })
+        let mut r = Registro { ruta, envios };
+        // Una difusión que se quedó a medias (el proceso murió entre transmitir y anotar)
+        // no se sabe si llegó: incierta, con el intento ya contado.
+        let ahora = crate::ahora_s();
+        let mut interrumpidas = false;
+        for a in r.envios.iter_mut() {
+            if a.info.estado == EstadoEnvio::Difundiendo {
+                a.info.estado = EstadoEnvio::Incierta;
+                a.info.motivo = "interrumpida durante la difusión".into();
+                interrumpidas = true;
+            }
+        }
+        if interrumpidas {
+            r.refrescar_todos(ahora);
+            r.guardar()?;
+        }
+        Ok(r)
+    }
+
+    /// Anota y persiste el comienzo de un intento de difusión ANTES de transmitir: el
+    /// intento queda contado aunque el proceso muera a continuación.
+    pub fn iniciar_difusion(&mut self, txid: &str, ahora: u64) -> Result<(), Error> {
+        let n = self.indice(txid)?;
+        let a = &mut self.envios[n];
+        a.info.estado = EstadoEnvio::Difundiendo;
+        a.info.motivo = "transmitiendo al servidor".into();
+        a.info.intentos_difusion += 1;
+        self.refrescar_todos(ahora);
+        self.guardar()
     }
 
     /// Escritura atómica (fichero temporal + renombrado), permisos 0600.
@@ -188,7 +230,21 @@ impl Registro {
             std::io::Write::write_all(&mut fh, &bytes).map_err(fichero_err)?;
             fh.sync_all().map_err(fichero_err)?;
         }
-        std::fs::rename(&tmp, &self.ruta).map_err(fichero_err)
+        std::fs::rename(&tmp, &self.ruta).map_err(fichero_err)?;
+        // Durabilidad del renombrado: fsync del directorio (solo unix; en otros sistemas
+        // se omite). Si falla, el estado no se da por guardado y no se transmite nada.
+        #[cfg(unix)]
+        {
+            let padre = self
+                .ruta
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new("."));
+            std::fs::File::open(padre)
+                .and_then(|d| d.sync_all())
+                .map_err(fichero_err)?;
+        }
+        Ok(())
     }
 
     fn indice(&self, txid: &str) -> Result<usize, Error> {
@@ -281,16 +337,12 @@ impl Registro {
         txid: &str,
         estado: EstadoEnvio,
         motivo: &str,
-        intento: bool,
         ahora: u64,
     ) -> Result<EnvioInfo, Error> {
         let n = self.indice(txid)?;
         let a = &mut self.envios[n];
         a.info.estado = estado;
         a.info.motivo = motivo.to_string();
-        if intento {
-            a.info.intentos_difusion += 1;
-        }
         self.refrescar_todos(ahora);
         self.guardar()?;
         Ok(self.envios[n].info.clone())
@@ -300,8 +352,10 @@ impl Registro {
     /// con un reemplazo vivo; o un reemplazo todavía abierto.
     pub fn en_curso(&self) -> Option<&EnvioInfo> {
         self.envios.iter().map(|a| &a.info).find(|i| {
-            matches!(i.estado, EstadoEnvio::Firmada | EstadoEnvio::Incierta)
-                || (i.abierta() && !i.reemplaza_a.is_empty())
+            matches!(
+                i.estado,
+                EstadoEnvio::Firmada | EstadoEnvio::Difundiendo | EstadoEnvio::Incierta
+            ) || (i.abierta() && !i.reemplaza_a.is_empty())
                 || (i.estado == EstadoEnvio::Enviada && self.reemplazo_vivo_de(&i.txid).is_some())
         })
     }
@@ -315,7 +369,12 @@ impl Registro {
     pub fn no_resueltas(&self) -> Vec<(Txid, Transaction)> {
         self.envios
             .iter()
-            .filter(|a| matches!(a.info.estado, EstadoEnvio::Firmada | EstadoEnvio::Incierta))
+            .filter(|a| {
+                matches!(
+                    a.info.estado,
+                    EstadoEnvio::Firmada | EstadoEnvio::Difundiendo | EstadoEnvio::Incierta
+                )
+            })
             .filter_map(|a| {
                 let txid = Txid::from_str(&a.info.txid).ok()?;
                 let tx = consensus::encode::deserialize_hex(&a.hex).ok()?;
@@ -355,6 +414,9 @@ impl Registro {
             } else if antes == EstadoEnvio::Enviada {
                 i.estado = EstadoEnvio::Incierta;
                 i.motivo = "ya no está en la mempool del servidor".into();
+            } else if antes == EstadoEnvio::Difundiendo {
+                i.estado = EstadoEnvio::Incierta;
+                i.motivo = "interrumpida durante la difusión".into();
             }
             if antes != i.estado {
                 cambio = true;

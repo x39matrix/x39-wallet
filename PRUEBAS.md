@@ -13,10 +13,18 @@ con `cargo test -- --ignored`.
 
 | Orden | Qué cubre | Resultado (30/10/2026) |
 |---|---|---|
-| `cargo test` | 24 unitarias: derivación BIP84, firma, estado sin claves, PSBT en dos pasos con re-verificación, caducidad, red del servidor (genesis), difusión aceptada/rechazada/incierta/«ya conocida», reemplazo RBF, persistencia; con un servidor Electrum **simulado** en regtest | 24 pasadas, 0 fallos, 4 ignoradas |
-| `cargo test --features mainnet` | lo mismo con mainnet permitida | 24 pasadas |
+| `cargo test` | 28 unitarias: derivación BIP84, firma, estado sin claves, PSBT en dos pasos con re-verificación, caducidad, red del servidor (genesis), difusión aceptada/incierta/«ya conocida», intento anotado y en disco antes de transmitir (comprobado por el simulado al recibir la transacción, y por corte entre transmitir y anotar), rechazo del servidor que nunca libera monedas (primer intento o reintento), reemplazo RBF, persistencia; con un servidor Electrum **simulado** en regtest | 28 pasadas, 0 fallos, 4 ignoradas |
+| `cargo test --features mainnet` | lo mismo con mainnet permitida | 28 pasadas |
 | `cargo test -- --ignored` | 4 contra un servidor **público de signet**: billetera nueva a cero, restaurar el vector BIP84 y encontrar direcciones, altura y comisión, rechazo del servidor si se pide otra red | 4 pasadas |
 | `cargo clippy --all-targets` (con y sin `mainnet`) | | 0 avisos |
+
+Regla de los rechazos (vigente desde el tercer commit): **ningún rechazo del servidor libera
+monedas**, tampoco en el primer intento. Un error de protocolo que no sea «ya conocida» deja
+la transacción *incierta* («rechazada: …; no se liberan monedas: reintenta o cancela por
+reemplazo»). La única liberación automática es cancelar una transacción firmada con cero
+intentos de difusión; *fallida* queda solo para un reemplazo cuya original se confirmó.
+Limitación: leer un fichero de envíos de versión 1 o 2 no reinterpreta sus estados antiguos;
+una *fallida* histórica por rechazo (solo laboratorio) se carga tal cual.
 
 ## 2. Ciclo completo contra un banco regtest local
 
@@ -35,8 +43,8 @@ Sobre el último paso, tal como fue: se retiró `estado.dat` y se **conservó**
 `estado.dat.envios.json` (el registro local de envíos) en el mismo directorio; `restaurar`
 recreó `estado.dat` desde la semilla y escaneó. Es una reconstrucción del estado de BDK
 conservando el registro de envíos, no una restauración solo desde la semilla. La
-restauración limpia (directorio nuevo con solo `red.txt` y `SEMILLA-DE-PRUEBA.txt`) está
-pendiente y se añadirá a este documento.
+restauración limpia (directorio nuevo con solo `red.txt` y `SEMILLA-DE-PRUEBA.txt`) está en
+la sección 2.1.
 
 Puerta de limpieza aplicada a este documento: cero IPs salvo direcciones de bucle local
 (127.0.0.0/8, ::1, localhost). Las `127.0.0.1` que aparecen son el bucle local del banco.
@@ -52,11 +60,13 @@ Notas sobre lo que se ve en el registro (añadidas a mano):
   minadas, y entonces difundidas desde la billetera.
 - **Hallazgo 1 (tercera transacción).** Bitcoin Core 30 ya no responde «Transaction already
   in block chain» sino «Transaction outputs already in utxo set», y electrs 0.11 lo reenvía
-  con código 2 (no -27). El motor lo clasificó como rechazo (*fallida*) y liberó las monedas;
-  la sincronización siguiente la vio anclada y la pasó a «confirmada pese al rechazo», con el
-  saldo correcto. Se añadió ese texto a la lista de respuestas «ya conocida» y una prueba
-  unitaria con él; la cuarta transacción repite la secuencia con el binario corregido y queda
-  *enviada — el servidor ya la conocía*.
+  con código 2 (no -27). El motor de entonces lo clasificó como rechazo (*fallida*) y liberó
+  las monedas; la sincronización siguiente la vio anclada y la pasó a «confirmada pese al
+  rechazo», con el saldo correcto. Se añadió ese texto a la lista de respuestas «ya conocida»
+  y una prueba unitaria con él; la cuarta transacción repite la secuencia con el binario
+  corregido y queda *enviada — el servidor ya la conocía*. Con la regla vigente ese caso
+  queda *enviada* (el texto «already in utxo set» ya se reconoce); incluso si ese texto no se
+  reconociera, quedaría *incierta* sin liberar monedas.
 - **Hallazgo 2 (reconstrucción del estado).** Tras `restaurar` (escaneo correcto), `direccion` devolvió el
   índice 0, una dirección ya usada: `sincronizar`/`escanear` solo persistían la cartera cuando
   había envíos sin resolver. Corregido (se persiste siempre), con prueba unitaria que falla
@@ -531,10 +541,79 @@ server.features: {"genesis_hash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012a
 
 ```
 
+### 2.1 Restauración limpia solo desde la semilla
+
+Directorio NUEVO con solo `red.txt` y `SEMILLA-DE-PRUEBA.txt` copiados de la billetera
+anterior (sin `estado.dat` ni `estado.dat.envios.json`). `restaurar` recrea el estado y
+escanea. Resultado: el mismo saldo (33630 sat) y los mismos 6 movimientos que la billetera
+original; la siguiente dirección nueva es la 2, posterior a las dos usadas. El registro de
+envíos queda vacío: una billetera restaurada solo desde la semilla no conoce los envíos
+firmados o inciertos anteriores hasta que el servidor los muestre (limitación documentada
+en la cabecera del crate).
+
+```text
+--- restauración LIMPIA: directorio nuevo con solo red.txt y SEMILLA-DE-PRUEBA.txt (sin estado.dat ni estado.dat.envios.json)
+$ ls -la ~/x39-wallet-prueba-regtest-restaurada
+total 24
+drwx------   2 usuario  usuario   4096 Oct 30 21:09 .
+drwxr-x--- 110 usuario  usuario  12288 Oct 30 21:09 ..
+-rw-------   1 usuario  usuario    203 Oct 30 20:43 SEMILLA-DE-PRUEBA.txt
+-rw-r--r--   1 usuario  usuario      8 Oct 30 20:43 red.txt
+
+$ ./estado.sh
+Altura Electrum: 108
+Génesis: 0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206
+Puerto Electrum: 127.0.0.1:60401
+server.version: ["electrs/0.11.1", "1.4"]
+server.features: {"genesis_hash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", "hash_function": "sha256", "hosts": {"tcp_port": 60401}, "protocol_max": "1.4", "protocol_min": "1.4", "pruning": null, "server_version": "electrs/0.11.1"}
+
+$ ~/x39-wallet/rust/target/release/x39-billetera-prueba restaurar ~/x39-wallet-prueba-regtest-restaurada
+servidor: tcp://127.0.0.1:60401 (regtest)
+estado recreado desde la semilla; escaneo completo…
+altura sincronizada: 108
+saldo: 33630 sat (confirmado 33630, pendiente 0, inmaduro 0)
+índices revelados: externo Some(1), interno Some(4)
+movimientos: 6
+  b09e9b8f7f88fcea58c3ed789ee97951c97f65723bf7a4db3d158aa3acaed21c  +33630 -38911 comisión Some(281)  bloque 108
+  86b6889927ff0fb31341eae121afabaf7ec5180a56516d176755c431d40e16fb  +38911 -49192 comisión Some(281)  bloque 107
+  018970300e0c3481510ed99682f3d8b5148a232f040d0a4e1111260685cbd82a  +49192 -49583 comisión Some(391)  bloque 106
+  7fd6da988cbb30db39306a4ec519bcfc61ef40387a88bb055a1a94bdfa6d78da  +49583 -200000 comisión Some(417)  bloque 105
+  0008412fb00bb27bd2dfe63a684dcbbebc97b96813d6ef8feba771d4fa74d835  +100000 -0 comisión Some(1410)  bloque 104
+  df8afebd550d79d7209e3b6a7277b2ac973c0f60979e2919782d386e2217bf73  +100000 -0 comisión Some(1410)  bloque 103
+
+$ ~/x39-wallet/rust/target/release/x39-billetera-prueba envios ~/x39-wallet-prueba-regtest-restaurada
+envíos firmados: 0
+
+$ ~/x39-wallet/rust/target/release/x39-billetera-prueba direccion ~/x39-wallet-prueba-regtest-restaurada
+dirección nueva (índice 2): bcrt1qmetshlk2cr3s24qjgxwhnwf5mtvhcedgz5ktzz
+
+--- comparación con la billetera original:
+$ ~/x39-wallet/rust/target/release/x39-billetera-prueba sincronizar ~/x39-wallet-prueba-regtest
+servidor: tcp://127.0.0.1:60401 (regtest)
+punta de la red: 108
+altura sincronizada: 108
+saldo: 33630 sat (confirmado 33630, pendiente 0, inmaduro 0)
+índices revelados: externo Some(2), interno Some(4)
+movimientos: 6
+  b09e9b8f7f88fcea58c3ed789ee97951c97f65723bf7a4db3d158aa3acaed21c  +33630 -38911 comisión Some(281)  bloque 108
+  86b6889927ff0fb31341eae121afabaf7ec5180a56516d176755c431d40e16fb  +38911 -49192 comisión Some(281)  bloque 107
+  018970300e0c3481510ed99682f3d8b5148a232f040d0a4e1111260685cbd82a  +49192 -49583 comisión Some(391)  bloque 106
+  7fd6da988cbb30db39306a4ec519bcfc61ef40387a88bb055a1a94bdfa6d78da  +49583 -200000 comisión Some(417)  bloque 105
+  0008412fb00bb27bd2dfe63a684dcbbebc97b96813d6ef8feba771d4fa74d835  +100000 -0 comisión Some(1410)  bloque 104
+  df8afebd550d79d7209e3b6a7277b2ac973c0f60979e2919782d386e2217bf73  +100000 -0 comisión Some(1410)  bloque 103
+
+$ ls -la ~/x39-wallet-prueba-regtest-restaurada
+total 28
+drwx------   2 usuario  usuario   4096 Oct 30 21:09 .
+drwxr-x--- 110 usuario  usuario  12288 Oct 30 21:09 ..
+-rw-------   1 usuario  usuario    203 Oct 30 20:43 SEMILLA-DE-PRUEBA.txt
+-rw-r--r--   1 usuario  usuario   2620 Oct 30 21:09 estado.dat
+-rw-r--r--   1 usuario  usuario      8 Oct 30 20:43 red.txt
+
+```
+
 ## 3. Pendiente de probar
 
-- Restauración limpia solo desde la semilla (directorio nuevo sin `estado.dat` ni
-  `estado.dat.envios.json`) contra el banco regtest.
 - Envío real en **signet** con la billetera `~/x39-wallet-prueba-signet` (espera fondos del
   faucet): sincronizar, auto-envío a la dirección índice 1, confirmación.
 - Todo lo de Android (UniFFI, módulo `:wallet`, ciclo desde la app) y NodeBridge.

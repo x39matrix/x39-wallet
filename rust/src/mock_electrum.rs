@@ -25,6 +25,10 @@ pub enum Difusion {
     Rechazar(i64, String),
     /// No responder (la conexión se queda muda ese tiempo).
     Colgar(Duration),
+    /// Al recibir la transacción, leer ese fichero y guardar una copia de su contenido en
+    /// `capturas` (para comprobar qué había en disco ANTES de responder); después seguir
+    /// con el modo indicado.
+    LeerAlRecibir(std::path::PathBuf, Box<Difusion>),
 }
 
 pub struct Estado {
@@ -34,6 +38,8 @@ pub struct Estado {
     pub historia: HashMap<String, Vec<(Txid, i64)>>,
     pub difusion: Difusion,
     pub difundidas: Vec<Txid>,
+    /// Copias de ficheros leídas con `Difusion::LeerAlRecibir`.
+    pub capturas: Vec<String>,
 }
 
 pub struct Simulado {
@@ -58,6 +64,7 @@ impl Simulado {
             historia: HashMap::new(),
             difusion: Difusion::Aceptar,
             difundidas: Vec::new(),
+            capturas: Vec::new(),
         }));
         let e2 = estado.clone();
         std::thread::spawn(move || {
@@ -115,6 +122,10 @@ impl Simulado {
 
     pub fn difundidas(&self) -> Vec<Txid> {
         self.estado.lock().unwrap().difundidas.clone()
+    }
+
+    pub fn capturas(&self) -> Vec<String> {
+        self.estado.lock().unwrap().capturas.clone()
     }
 }
 
@@ -228,18 +239,26 @@ fn responder(
             let hex = p[0].as_str().ok_or((1, "hex".to_string()))?;
             let tx: Transaction = consensus::encode::deserialize_hex(hex)
                 .map_err(|_| (1, "tx ilegible".to_string()))?;
-            match e.difusion.clone() {
-                Difusion::Aceptar => {
-                    registrar(&mut e, &tx, 0);
-                    let txid = tx.compute_txid();
-                    e.difundidas.push(txid);
-                    json!(txid.to_string())
-                }
-                Difusion::Rechazar(c, m) => return Err((c, m)),
-                Difusion::Colgar(d) => {
-                    drop(e);
-                    std::thread::sleep(d);
-                    return Ok(None);
+            let mut modo = e.difusion.clone();
+            loop {
+                match modo {
+                    Difusion::LeerAlRecibir(ruta, despues) => {
+                        let copia = std::fs::read_to_string(&ruta).unwrap_or_default();
+                        e.capturas.push(copia);
+                        modo = *despues;
+                    }
+                    Difusion::Aceptar => {
+                        registrar(&mut e, &tx, 0);
+                        let txid = tx.compute_txid();
+                        e.difundidas.push(txid);
+                        break json!(txid.to_string());
+                    }
+                    Difusion::Rechazar(c, m) => return Err((c, m)),
+                    Difusion::Colgar(d) => {
+                        drop(e);
+                        std::thread::sleep(d);
+                        return Ok(None);
+                    }
                 }
             }
         }

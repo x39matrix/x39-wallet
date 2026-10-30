@@ -31,6 +31,11 @@
 //! todavía; si no entra, solo cabe reintentar su difusión o esperar a que confirme él o
 //! la original.
 //!
+//! Limitación conocida: una billetera restaurada solo desde la semilla (sin el fichero
+//! lateral de envíos) no conoce los envíos firmados o inciertos anteriores a la
+//! restauración hasta que el servidor los muestre; por eso restaurar exige escanear antes
+//! de nada, y hasta entonces no debe darse por libre ninguna moneda.
+//!
 //! Esta es la parte que TIENE que ser correcta: derivación, revisión y firma. Se comprueba
 //! con vectores BIP84, verificando la firma del testigo y con un servidor simulado.
 
@@ -1225,11 +1230,20 @@ impl Billetera {
         Ok(info)
     }
 
-    /// Difunde (o REINTENTA) la transacción firmada `txid`. Éxito, o "ya la conocía"
-    /// (`already known`, `already in mempool`, `already in block chain`, código -27) →
-    /// `Enviada`. Rechazo explícito del servidor → `Fallida` y monedas liberadas. Sin
-    /// respuesta → `Incierta`: las monedas siguen gastadas y solo cabe reintentar esta
-    /// misma transacción o cancelarla por reemplazo (`preparar_cancelacion`).
+    /// Difunde (o REINTENTA) la transacción firmada `txid`.
+    ///
+    /// Orden de las cosas: primero se conecta (un fallo de conexión no cuenta como
+    /// intento); después se ANOTA y persiste el intento (`Difundiendo`, intentos + 1);
+    /// después se transmite; después se anota el resultado. Así, si el proceso muere entre
+    /// transmitir y anotar, al reabrir la transacción figura como incierta y nunca como
+    /// nunca difundida.
+    ///
+    /// Resultado: éxito, o "ya la conocía" (`already known`, `already in mempool`,
+    /// `already in block chain`, `already in utxo set`, código -27) → `Enviada`. Cualquier
+    /// otra respuesta, rechazo explícito incluido → `Incierta`: NINGÚN rechazo libera
+    /// monedas (el servidor puede haber pasado la transacción al nodo y fallar después).
+    /// Solo cabe reintentar esta misma transacción o cancelarla por reemplazo
+    /// (`preparar_cancelacion`).
     pub fn difundir(&mut self, servidor: &str, txid: &str) -> Result<EnvioInfo, Error> {
         let actual = self
             .envios
@@ -1244,40 +1258,40 @@ impl Billetera {
                     actual.estado
                 )))
             }
-            EstadoEnvio::Firmada | EstadoEnvio::Incierta => {}
+            EstadoEnvio::Firmada | EstadoEnvio::Incierta | EstadoEnvio::Difundiendo => {}
         }
         // Si no se llega a conectar (o el servidor es de otra red) no se ha enviado nada:
-        // el estado no cambia.
+        // el estado no cambia y no cuenta como intento.
         let c = conectar(servidor, self.red, self.espera)?;
         let tx = self.envios.tx(txid)?;
         let ahora = ahora_s();
+        // Anotado y en disco ANTES de transmitir; si no se puede guardar, no se transmite.
+        self.envios.iniciar_difusion(txid, ahora)?;
         match c.inner.transaction_broadcast(&tx) {
             Ok(_) => self.envios.marcar(
                 txid,
                 EstadoEnvio::Enviada,
                 "aceptada por el servidor",
-                true,
                 ahora,
             ),
             Err(e) if ya_conocida(&e) => self.envios.marcar(
                 txid,
                 EstadoEnvio::Enviada,
                 &format!("el servidor ya la conocía: {e}"),
-                true,
                 ahora,
             ),
-            Err(e) if es_rechazo(&e) => {
-                let info =
-                    self.envios
-                        .marcar(txid, EstadoEnvio::Fallida, &e.to_string(), true, ahora)?;
-                self.liberar(txid)?;
-                Ok(info)
-            }
+            Err(e) if es_rechazo(&e) => self.envios.marcar(
+                txid,
+                EstadoEnvio::Incierta,
+                &format!(
+                    "rechazada: {e}; no se liberan monedas: reintenta o cancela por reemplazo"
+                ),
+                ahora,
+            ),
             Err(e) => self.envios.marcar(
                 txid,
                 EstadoEnvio::Incierta,
                 &format!("sin respuesta: {e}"),
-                true,
                 ahora,
             ),
         }
@@ -1311,7 +1325,6 @@ impl Billetera {
             txid,
             EstadoEnvio::Cancelada,
             "cancelada por el usuario",
-            false,
             ahora_s(),
         )?;
         self.liberar(txid)?;
