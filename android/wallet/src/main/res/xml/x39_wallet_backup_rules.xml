@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 y anteriores: nada de la billetera sale en copias de seguridad. -->
+<full-backup-content>
+    <exclude domain="file" path="x39-wallet" />
+    <exclude domain="database" path="x39-wallet" />
+    <exclude domain="sharedpref" path="x39-wallet.xml" />
+</full-backup-content>
