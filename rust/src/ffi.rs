@@ -103,6 +103,12 @@ impl Billetera {
         }))
     }
 
+    /// ¿Estas palabras (ByteBuffer directo) son la semilla de esta billetera? No firma ni guarda.
+    /// Para recuperar la clave del Keystore sin tocar el estado de la billetera.
+    pub fn coincide_semilla(&self, mnemonico: &[u8]) -> bool {
+        self.con(|b| b.coincide_semilla(mnemonico))
+    }
+
     /// Espera máxima por respuesta del servidor, en segundos.
     pub fn fijar_espera_s(&self, segundos: u64) {
         self.con(|b| b.fijar_espera(Duration::from_secs(segundos.max(1))))

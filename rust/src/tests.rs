@@ -367,6 +367,20 @@ fn una_sola_billetera_por_fichero_en_el_proceso() {
 }
 
 #[test]
+fn coincide_semilla_sin_firmar_ni_guardar() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("b.dat");
+    let b = Billetera::crear(mn(), Red::Signet, &f).unwrap();
+    let antes = std::fs::read(&f).unwrap();
+    assert!(b.coincide_semilla(mn()));
+    assert!(!b.coincide_semilla(OTRA.as_bytes()));
+    assert!(!b.coincide_semilla(b"esto no es un mnemonico"));
+    assert!(!b.coincide_semilla(&[0xff, 0xfe]));
+    assert_eq!(std::fs::read(&f).unwrap(), antes, "no escribe nada");
+    assert!(!envios::Registro::ruta_de(&f).exists());
+}
+
+#[test]
 fn red_desde_texto() {
     assert_eq!("signet".parse::<Red>().unwrap(), Red::Signet);
     assert_eq!("testnet".parse::<Red>().unwrap(), Red::Testnet);

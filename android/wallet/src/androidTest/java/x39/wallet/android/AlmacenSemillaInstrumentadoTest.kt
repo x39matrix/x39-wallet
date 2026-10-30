@@ -31,8 +31,13 @@ class AlmacenSemillaInstrumentadoTest {
         return km != null && km.isDeviceSecure
     }
 
+    /**
+     * Con la credencial del aparato admitida (API 30+, decisión del proyecto) un cambio de
+     * biometría NO invalida la clave; la invalidación cubre pérdida o reinicio del Keystore.
+     */
     @Test
-    fun laClaveExigeAutenticacionPorOperacionYSeInvalidaConLaBiometria() {
+    fun laClaveExigeAutenticacionPorOperacion() {
+        assumeTrue("hace falta Android 6", Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
         assumeTrue("hace falta pantalla de bloqueo", conPantallaDeBloqueo())
         val almacen = AlmacenSemilla(ctx, alias)
         try {
@@ -42,7 +47,6 @@ class AlmacenSemillaInstrumentadoTest {
             val k = ks.getKey(alias, null) as SecretKey
             val info = SecretKeyFactory.getInstance(k.algorithm, "AndroidKeyStore").getKeySpec(k, KeyInfo::class.java) as KeyInfo
             assertTrue("autenticación de usuario requerida", info.isUserAuthenticationRequired)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) assertTrue(info.isInvalidatedByBiometricEnrollment)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 assertEquals(0, info.userAuthenticationValidityDurationSeconds)
                 assertEquals(

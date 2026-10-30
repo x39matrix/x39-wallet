@@ -1,9 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <!-- Biometría para BiometricPrompt (API 28+); en anteriores, USE_FINGERPRINT la pide androidx.biometric. -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <!-- Servidor Electrum del usuario. -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <!-- Las reglas de copia de seguridad (res/xml) las referencia la APP en su <application>:
          android:fullBackupContent="@xml/x39_wallet_backup_rules"
          android:dataExtractionRules="@xml/x39_wallet_data_extraction_rules"
          Además, los datos de la billetera viven en noBackupFilesDir, excluido de la copia automática. -->
+    <application>
+        <!-- Pantallas de la billetera: privadas de la app que las incluya (exported=false).
+             Solo se abren en Android 6+ (API 23): el Keystore con autenticación por operación lo exige;
+             la app lo comprueba antes de lanzarlas (Redes.androidCompatible). -->
+        <activity android:name=".android.BilleteraActivity" android:exported="false" android:theme="@style/Theme.AppCompat.NoActionBar" tools:targetApi="m" />
+        <activity android:name=".android.CrearRestaurarActivity" android:exported="false" android:theme="@style/Theme.AppCompat.NoActionBar" tools:targetApi="m" />
+        <activity android:name=".android.RecibirActivity" android:exported="false" android:theme="@style/Theme.AppCompat.NoActionBar" tools:targetApi="m" />
+        <activity android:name=".android.EnviarActivity" android:exported="false" android:theme="@style/Theme.AppCompat.NoActionBar" tools:targetApi="m" />
+        <activity android:name=".android.HistorialActivity" android:exported="false" android:theme="@style/Theme.AppCompat.NoActionBar" tools:targetApi="m" />
+        <activity android:name=".android.AjustesActivity" android:exported="false" android:theme="@style/Theme.AppCompat.NoActionBar" tools:targetApi="m" />
+    </application>
 </manifest>

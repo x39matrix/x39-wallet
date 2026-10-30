@@ -55,6 +55,7 @@ class BilleterasInstrumentadoTest {
     fun unaSolaBilleteraPorFichero_tambienDesdeAndroid() {
         val f = ficheroNuevo()
         val primera = SemillaNueva(nuevaSemilla()).use { s -> s.comoMnemonico().use { Billeteras.crear(it, Red.SIGNET, f) } }
+        assertEquals("la primera revela el índice 0", 0u, primera.motor.nuevaDireccion().indice)
         try {
             Billeteras.abrir(f, Red.SIGNET)
             fail("la segunda apertura debe fallar")
@@ -69,7 +70,7 @@ class BilleterasInstrumentadoTest {
             assertTrue(e.message!!.contains("ya abierta"))
         }
         primera.close()
-        Billeteras.abrir(f, Red.SIGNET).use { b -> assertEquals(1u, b.motor.nuevaDireccion().indice) }
+        Billeteras.abrir(f, Red.SIGNET).use { b -> assertEquals("al reabrir sigue por el 1", 1u, b.motor.nuevaDireccion().indice) }
     }
 
     @Test

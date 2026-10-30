@@ -24,8 +24,14 @@ ruta es privada y fija.
 
 `AlmacenSemilla`: AES-256-GCM con clave del Android Keystore (StrongBox si lo hay),
 autenticación por operación (`BiometricPrompt.CryptoObject` vía `Autenticacion.pedir`),
-invalidación al cambiar la biometría (`ClaveInvalidadaException` → restaurar desde la
-semilla). Fichero en `noBackupFilesDir/x39-wallet/`. La app debe referenciar en su
+cabecera ligada al cifrado (AAD), clave solo con el aparato desbloqueado. Con la credencial
+del aparato admitida (API 30+, decisión del proyecto) un cambio de biometría NO invalida la
+clave; la invalidación que se detecta (`ClaveInvalidadaException`, clave desaparecida) cubre
+la pérdida o el reinicio del Keystore. Opción futura anotada: ajuste «solo biometría».
+Recuperación tras invalidación: NO se borra nada; se piden las 12 palabras, el motor
+comprueba que son de esta billetera (`coincideSemilla`, sin firmar) y solo entonces se crea
+una clave nueva y se vuelve a cifrar; si no coinciden o se cancela, todo queda como estaba.
+Fichero en `noBackupFilesDir/x39-wallet/`. La app debe referenciar en su
 `<application>` las reglas `@xml/x39_wallet_backup_rules` y
 `@xml/x39_wallet_data_extraction_rules`, y llamar a `Window.protegerContraCapturas()` en las
 pantallas con mnemónico o firma.
@@ -38,9 +44,13 @@ la biblioteca nativa cargada lleva el marcador `x39wallet-redes=solo-prueba`.
 ## Pruebas
 
 - JVM (`src/test`): contrato del `Mnemonico` y `SemillaNueva`; corren sin dispositivo.
-- Instrumentadas (`src/androidTest`): biblioteca nativa real, una billetera por fichero,
-  mainnet prohibida, parámetros de la clave del Keystore. Exigen un aparato arm64-v8a con
-  pantalla de bloqueo.
+- Instrumentadas (`src/androidTest`), 10: biblioteca nativa real y marcador de redes, una
+  billetera por fichero (índice 0 antes de cerrar, 1 al reabrir), mainnet prohibida,
+  parámetros de la clave del Keystore y fichero fuera de copias, pantalla Enviar con un
+  repositorio falso (firmar → resultado → difundir, y difusión fallida), recuperación de la
+  clave sin tocar estado ni registro de envíos, y restauración sin servidor con escaneo
+  pendiente completado al sincronizar (usa el servidor público de signet). Exigen un aparato
+  arm64-v8a con pantalla de bloqueo y red.
 
 ## Ejecutar las pruebas instrumentadas en el aparato (depuración inalámbrica, sin USB)
 
@@ -83,3 +93,34 @@ el aparato (Ajustes → Opciones de desarrollador), y `adb` del SDK (`platform-t
 
 Las pruebas no tocan datos de ninguna app instalada: usan el almacenamiento privado del
 paquete de pruebas (`x39.wallet.test`) y un alias de clave propio que borran al terminar.
+
+## Repositorio y pantallas
+
+- `WalletRepository` (una instancia por proceso): toda la red en `Dispatchers.IO`; un `Mutex`
+  para que haya una operación de envío a la vez; `StateFlow<Vista>` con saldo, altura,
+  movimientos y envíos; reanuda al abrir lo persistido (envíos firmados o inciertos). El
+  mnemónico entra solo como `Mnemonico` y lo cierra quien lo abrió.
+- `Ajustes`: servidor Electrum `host:puerto` (vacío por defecto; sin esquema → `ssl://`;
+  aviso si `tcp://`) y red (solo cambia antes de crear la billetera).
+- Pantallas (vistas programáticas, misma estética que la app): `BilleteraActivity` (saldo,
+  estado, envío sin resolver con reintentar/cancelar), `CrearRestaurarActivity` (12 palabras
+  una vez con `setText(char[])`, comprobación de una palabra, campo sin portapapeles,
+  FLAG_SECURE), `RecibirActivity` (dirección nueva + QR), `EnviarActivity` (revisar →
+  prompt → firmar → difundir, FLAG_SECURE), `HistorialActivity` (movimientos, envíos,
+  reintento, cancelación y cancelación por reemplazo, FLAG_SECURE) y `AjustesActivity`.
+- Escaneo completo pendiente: al restaurar se escribe la marca `estado.dat.escaneo-pendiente`
+  (sobrevive al cierre del proceso); mientras exista, `sincronizar()` hace el escaneo
+  completo, `prepararEnvio` se niega con mensaje claro y la pantalla principal lo avisa; se
+  quita cuando el escaneo termina bien.
+- Propiedad del mnemónico: quien lo crea lo cierra. `conSemilla` lo obtiene de forma no
+  cancelable y lo cierra en `finally`; `guardarSemilla` toma la propiedad y lo cierra en todos
+  los caminos (fallo al preparar, prompt cancelado, fallo al guardar, fin, cancelación);
+  `CrearRestaurarActivity` pone a cero palabras, semilla y campo en `onStop` siempre.
+- Pendiente: textos solo en español (la app tiene en, ar, ja y zh); se moverán a recursos al
+  montar en la fase F.
+
+## Requisito de Android
+
+El módulo declara minSdk 21 (como la app), pero la semilla cifrada con autenticación por
+operación exige las API del Keystore de Android 6 (API 23): en un aparato anterior la
+billetera se niega a arrancar con un mensaje claro (`Redes.exigirAndroid()`).

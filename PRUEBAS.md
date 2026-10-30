@@ -612,8 +612,67 @@ drwxr-x--- 110 usuario  usuario  12288 Oct 30 21:09 ..
 
 ```
 
+## 4. Módulo Android `:wallet` (fase D)
+
+Compilación independiente en `android/` (AGP 8.7.2, Kotlin 1.9.25, Gradle 8.9, compileSdk 35,
+minSdk 21; la billetera exige en tiempo de ejecución Android 6 / API 23 por el Keystore).
+
+| Qué | Resultado (31/10/2026) |
+|---|---|
+| `android/build-native.sh --actualizar` y `--verificar` | `libx39wallet.so` 6936ed89b0d79a81fc75cb2c0253959b0501f9ff467233c01744703a61b24bdb, 9.325.968 bytes; misma suma en compilación limpia (REPRODUCIBLE) |
+| `:wallet:lintDebug` | 0 errores, 0 avisos (1 informativo documentado en `lint.xml`) |
+| `:wallet:testDebugUnitTest` (JVM) | `MnemonicoTest`: 6 pruebas, 0 fallos |
+| `:wallet:connectedDebugAndroidTest` en el aparato | 10 pruebas, 0 fallos, 0 omitidas (abajo) |
+
+Aparato: Redmi Note 15 5G (modelo 25098RA98G), Android 16 (API 36), arm64-v8a, páginas de
+4 KB, con pantalla de bloqueo configurada, conectado por depuración inalámbrica desde WSL2.
+La prueba de escaneo pendiente habló desde el aparato con el servidor público de signet y
+encontró la historia del vector BIP84.
+
+Salida de Gradle (íntegra, quitadas las tareas intermedias):
+
+```text
+> Task :wallet:connectedDebugAndroidTest
+Starting 10 tests on 25098RA98G - 16
+25098RA98G - 16 Tests 8/10 completed. (0 skipped) (0 failed)
+Finished 10 tests on 25098RA98G - 16
+BUILD SUCCESSFUL in 52s
+53 actionable tasks: 2 executed, 51 up-to-date
+```
+
+Resultados por prueba (de los XML de `wallet/build/outputs/androidTest-results/connected/debug/`):
+
+```text
+x39.wallet.android.AlmacenSemillaInstrumentadoTest | tests 10 failures 0 errors 0 skipped 0
+  - AlmacenSemillaInstrumentadoTest.ficheroCifradoFueraDeLasCopiasDeSeguridad ok 0.007s
+  - AlmacenSemillaInstrumentadoTest.laClaveExigeAutenticacionPorOperacion ok 0.044s
+  - BilleterasInstrumentadoTest.mainnetProhibidaPorElMotor ok 0.053s
+  - BilleterasInstrumentadoTest.unaSolaBilleteraPorFichero_tambienDesdeAndroid ok 0.028s
+  - BilleterasInstrumentadoTest.bibliotecaSoloRedesDePrueba ok 0.001s
+  - BilleterasInstrumentadoTest.nuevaSemilla_docePalabras_yCreaBilleteraConByteBufferDirecto ok 0.029s
+  - EnviarActivityInstrumentadoTest.firmarResultadoDifundir_sinExcepcion_yMuestraElEstado ok 1.921s
+  - EnviarActivityInstrumentadoTest.siLaDifusionFalla_loDiceYNoRompe ok 1.597s
+  - RecuperacionYEscaneoInstrumentadoTest.restaurarSinServidor_dejaEscaneoPendiente_ySincronizarLoCompleta ok 20.041s
+  - RecuperacionYEscaneoInstrumentadoTest.recuperarLaClave_noTocaElEstadoNiElRegistroDeEnvios ok 0.078s
+```
+
+Lo que cubren: biblioteca nativa real con marcador de solo redes de prueba; semilla nueva de
+12 palabras y creación con ByteBuffer directo; una billetera por fichero también desde
+Android (índice 0 antes de cerrar, 1 al reabrir; el motor se niega aunque se salte el
+registro Kotlin); mainnet prohibida; parámetros reales de la clave del Keystore
+(autenticación por operación, 256 bits, GCM, tipo de autenticación biometría fuerte o
+credencial del aparato) y que sin autenticar no cifra; fichero cifrado bajo
+`noBackupFilesDir`; pantalla Enviar con repositorio falso (firmar → resultado → difundir sin
+excepción, y difusión fallida avisada); recuperación de la clave sin tocar `estado.dat` ni
+el registro de envíos (una firmada sigue firmada con 0 intentos); restauración sin servidor
+que deja la marca de escaneo pendiente, se niega a preparar envíos, sobrevive a otra
+instancia del repositorio y se completa al sincronizar con servidor.
+
+No probado todavía: las pantallas una por una en el aparato (fase G), el prompt biométrico
+real (no se automatiza) y el montaje en la app (fase F).
+
 ## 3. Pendiente de probar
 
 - Envío real en **signet** con la billetera `~/x39-wallet-prueba-signet` (espera fondos del
   faucet): sincronizar, auto-envío a la dirección índice 1, confirmación.
-- Todo lo de Android (UniFFI, módulo `:wallet`, ciclo desde la app) y NodeBridge.
+- Las pantallas Android en el aparato una por una, el ciclo completo desde la app (fase G) y NodeBridge.

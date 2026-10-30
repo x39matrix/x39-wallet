@@ -25,4 +25,12 @@ object Redes {
         check(permitida(red)) { "red no permitida en esta edición: ${red.name.lowercase()}" }
         comprobarBiblioteca()
     }
+
+    /** La semilla cifrada en el Keystore con autenticación por operación exige Android 6 (API 23). */
+    @androidx.annotation.ChecksSdkIntAtLeast(api = android.os.Build.VERSION_CODES.M)
+    fun androidCompatible(): Boolean = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M
+
+    fun exigirAndroid() {
+        check(androidCompatible()) { "la billetera exige Android 6 o superior" }
+    }
 }

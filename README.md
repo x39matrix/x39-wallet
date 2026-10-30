@@ -34,6 +34,11 @@ a paso, límites conocidos). Lo que ya está decidido y probado se recoge en `PR
   su `ByteArray` en cuanto lo ha mostrado y cifrado. Trabajo futuro: implementar `Lower` a
   mano para un tipo `Semilla` que escriba directamente en el búfer de salida (dejaría una
   sola copia, la de UniFFI).
+- **Clave del Keystore**: la semilla se cifra con una clave que exige autenticación por
+  operación (biometría fuerte o credencial del aparato en Android 11+). Con la credencial del
+  aparato admitida, un cambio de biometría no invalida la clave; la invalidación que se
+  detecta cubre la pérdida o el reinicio del almacén de claves, y se recupera con las 12
+  palabras sin borrar el estado de la billetera. Opción futura: ajuste «solo biometría».
 - **Una sola instancia por fichero**: el motor rechaza abrir dos veces el mismo fichero de
   estado en un proceso; el lado Android debe mantener una sola `Billetera` por fichero. La
   protección es por ruta canónica dentro del mismo proceso; no cubre otros procesos. En

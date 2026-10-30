@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<lint>
+    <!-- Versiones fijadas a propósito (reproducibles y ya presentes en la caché del proyecto);
+         se suben de forma revisada, no por aviso de lint. -->
+    <issue id="GradleDependency" severity="ignore" />
+    <!-- Única ABI por diseño: arm64-v8a. -->
+    <issue id="ChromeOsAbiSupport" severity="ignore" />
+    <!-- Los textos están en español en código hasta moverlos a recursos en la fase F. -->
+    <issue id="SetTextI18n" severity="informational" />
+</lint>

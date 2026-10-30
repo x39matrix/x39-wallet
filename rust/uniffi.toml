@@ -2,3 +2,7 @@
 [bindings.kotlin]
 package_name = "x39.wallet"
 cdylib_name = "x39wallet"
+# Destino Android: limpiador de referencias de Android (SystemCleaner en API 33+, JNA antes),
+# en vez de java.lang.ref.Cleaner, que no existe por debajo de API 33.
+android = true
+android_cleaner = true

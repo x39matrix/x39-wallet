@@ -33,6 +33,12 @@ android {
     // .so sin comprimir y alineadas en el APK (páginas de 16 KB).
     packaging { jniLibs { useLegacyPackaging = false } }
 
+    lint {
+        lintConfig = file("lint.xml")
+        abortOnError = true
+        warningsAsErrors = false
+    }
+
     // La biblioteca nativa y los bindings los genera android/build-native.sh:
     //   src/main/jniLibs/arm64-v8a/libx39wallet.so  y  src/main/java/x39/wallet/x39wallet.kt
 }
@@ -45,6 +51,11 @@ dependencies {
     implementation("androidx.annotation:annotation:1.9.0")
     // BiometricPrompt.CryptoObject con minSdk 21.
     implementation("androidx.biometric:biometric:1.1.0")
+    // Pantallas (vistas programáticas) y lifecycleScope.
+    implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("androidx.activity:activity-ktx:1.9.0")
+    // QR de la dirección de recibir.
+    implementation("com.google.zxing:core:3.5.3")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test:runner:1.5.2")

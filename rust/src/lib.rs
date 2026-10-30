@@ -722,6 +722,15 @@ impl Billetera {
         Ok(b)
     }
 
+    /// ¿Estas palabras son la semilla de ESTA billetera? Deriva el descriptor público y lo
+    /// compara con el guardado; no firma nada ni guarda nada. Un mnemónico inválido → `false`.
+    pub fn coincide_semilla(&self, mnemonico: &[u8]) -> bool {
+        match descriptores_publicos(mnemonico, self.red) {
+            Ok((de, _)) => de == *self.cartera.public_descriptor(KeychainKind::External),
+            Err(_) => false,
+        }
+    }
+
     /// Espera máxima por respuesta del servidor (por defecto [`ESPERA_RED`]).
     pub fn fijar_espera(&mut self, espera: Duration) {
         self.espera = espera;

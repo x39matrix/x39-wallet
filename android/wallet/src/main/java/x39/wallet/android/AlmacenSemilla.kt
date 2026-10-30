@@ -8,6 +8,7 @@ import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
 import android.system.Os
 import android.system.OsConstants
+import androidx.annotation.RequiresApi
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
@@ -29,8 +30,15 @@ class ClaveInvalidadaException(causa: Throwable? = null) :
  *    `setUserAuthenticationParameters(0, BIOMETRIC_STRONG | DEVICE_CREDENTIAL)`; antes,
  *    `setUserAuthenticationValidityDurationSeconds(-1)`. Cada cifrado o descifrado exige un
  *    `BiometricPrompt` con `CryptoObject(cipher)`: ver [Autenticacion]. Cancelar = abortar.
- *  - `setInvalidatedByBiometricEnrollment(true)`: al cambiar la biometría la clave muere; se
- *    detecta ([ClaveInvalidadaException]) y la app exige restaurar desde la semilla.
+ *  - Invalidación: con la credencial del aparato admitida (API 30+, decisión del proyecto), un
+ *    cambio de biometría NO invalida la clave (`setInvalidatedByBiometricEnrollment` solo
+ *    actúa en claves de solo biometría). La invalidación que se detecta
+ *    ([ClaveInvalidadaException] o clave desaparecida) cubre la pérdida o el reinicio del
+ *    Keystore (p. ej. quitar el bloqueo de pantalla, restablecer el aparato). Opción futura
+ *    anotada: ajuste «solo biometría», que sí invalidaría al cambiar la huella o la cara.
+ *  - Recuperación tras invalidación: NO se borra nada del estado de la billetera; se piden
+ *    las 12 palabras, el motor comprueba que son de esta billetera (`coincideSemilla`), y
+ *    solo entonces [regenerarClave] crea una clave nueva y se vuelve a cifrar.
  *  - `setUnlockedDeviceRequired(true)` en API 28+: la clave solo sirve con el aparato
  *    desbloqueado. (Si diera problemas al salir del bloqueo en algún aparato, se documenta y
  *    se quita; primero se prueba.)
@@ -46,6 +54,7 @@ class ClaveInvalidadaException(causa: Throwable? = null) :
  * Flujo: `prepararCifrado()` → prompt con el cipher → `guardar(cipherAutenticado, mnemonico)`;
  *        `prepararDescifrado()` → prompt con el cipher → `leer(cipherAutenticado)`.
  */
+@RequiresApi(Build.VERSION_CODES.M) // el Keystore con autenticación por operación exige Android 6
 class AlmacenSemilla(context: Context, private val alias: String = ALIAS_POR_DEFECTO) {
 
     private val dir = File(context.noBackupFilesDir, "x39-wallet")
@@ -173,7 +182,16 @@ class AlmacenSemilla(context: Context, private val alias: String = ALIAS_POR_DEF
         return Mnemonico.deBufferDirecto(salida)
     }
 
-    /** Borra el fichero cifrado y la clave (para restaurar desde la semilla o empezar de cero). */
+    /**
+     * Clave NUEVA para volver a cifrar la semilla tras una invalidación. Solo toca el Keystore;
+     * el fichero cifrado antiguo (ya inútil) se sobrescribe atómicamente al [guardar].
+     */
+    fun regenerarClave(): Boolean {
+        if (almacen.containsAlias(alias)) almacen.deleteEntry(alias)
+        return asegurarClave()
+    }
+
+    /** Borra el fichero cifrado y la clave (para empezar de cero). No toca el estado de la billetera. */
     fun borrarTodo() {
         fichero.delete()
         File(dir, "semilla.enc.tmp").delete()
