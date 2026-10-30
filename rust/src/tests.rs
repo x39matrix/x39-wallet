@@ -1,6 +1,7 @@
 //! Pruebas del motor. Las unitarias usan regtest con un servidor Electrum SIMULADO
 //! (`mock_electrum`); las marcadas `#[ignore]` hablan con un servidor público de signet
-//! (`cargo test -- --ignored`). Con `--features lab` se añaden las negativas de mainnet.
+//! (`cargo test -- --ignored`). Por defecto mainnet está prohibida y se prueba que lo
+//! está; con `--features mainnet` se prueba lo contrario.
 
 use super::mock_electrum::{Difusion, Simulado};
 use super::*;
@@ -318,16 +319,16 @@ fn red_desde_texto() {
     assert_eq!(Red::de_network(Network::Regtest), Some(Red::Regtest));
 }
 
-#[cfg(not(feature = "lab"))]
+#[cfg(feature = "mainnet")]
 #[test]
-fn sin_lab_mainnet_se_puede_nombrar() {
+fn con_feature_mainnet_se_puede_nombrar() {
     assert_eq!("mainnet".parse::<Red>().unwrap(), Red::Mainnet);
 }
 
-// ----- Feature `lab`: mainnet prohibida en toda la API pública -----------------------
+// ----- Por defecto (sin la feature `mainnet`): mainnet prohibida en toda la API pública --
 
-#[cfg(feature = "lab")]
-mod lab {
+#[cfg(not(feature = "mainnet"))]
+mod sin_mainnet {
     use super::*;
 
     #[test]
@@ -389,6 +390,53 @@ fn regtest_sincroniza_con_el_simulado() {
     assert_eq!(b.movimientos().len(), 1);
     assert_eq!(altura_red(Red::Regtest, &sim.url).unwrap(), 1);
     assert_eq!(estimar_comision(Red::Regtest, &sim.url, 2).unwrap(), 2.0);
+}
+
+#[test]
+fn regtest_sincronizar_y_escanear_persisten_sin_envios() {
+    // Sin ningún envío en curso, sincronizar y escanear deben dejar en disco la altura,
+    // los índices y las transacciones: al reabrir no se vuelve a empezar de cero ni se
+    // repite una dirección ya usada. (Fallo visto en el banco regtest al restaurar.)
+    let dir = tempfile::tempdir().unwrap();
+    let sim = Simulado::arrancar(Network::Regtest);
+    let f = dir.path().join("b.dat");
+    {
+        let mut b = billetera_regtest(dir.path(), &sim);
+        b.sincronizar(&sim.url).unwrap();
+        assert_eq!(b.altura(), 1);
+    }
+    {
+        let mut b = Billetera::abrir(&f, Red::Regtest).unwrap();
+        assert_eq!(b.altura(), 1, "la altura sincronizada se persistió");
+        assert_eq!(b.saldo().confirmado, FONDOS);
+        assert_eq!(b.movimientos().len(), 1);
+        assert_eq!(
+            b.nueva_direccion().unwrap().0,
+            1,
+            "la dirección 0 ya se reveló antes"
+        );
+    }
+    // Restaurar desde la semilla en otro fichero: el escaneo encuentra la dirección usada y
+    // al reabrir la siguiente dirección nueva es posterior a ella.
+    let g = dir.path().join("restaurada.dat");
+    {
+        let mut r = Billetera::crear(mn(), Red::Regtest, &g).unwrap();
+        r.fijar_espera(Duration::from_secs(1));
+        r.escanear(&sim.url).unwrap();
+        assert_eq!(r.saldo().confirmado, FONDOS);
+        assert_eq!(r.indices().0, Some(0));
+    }
+    {
+        let mut r = Billetera::abrir(&g, Red::Regtest).unwrap();
+        assert_eq!(r.altura(), 1);
+        assert_eq!(r.saldo().confirmado, FONDOS, "el escaneo se persistió");
+        assert_eq!(r.movimientos().len(), 1);
+        assert_eq!(
+            r.nueva_direccion().unwrap().0,
+            1,
+            "no se repite la dirección usada"
+        );
+    }
 }
 
 #[test]
@@ -795,11 +843,13 @@ fn regtest_difusion_incierta_nunca_reconstruye_y_reintenta_la_misma() {
 fn regtest_ya_conocida_es_exito_y_no_libera() {
     // «txn-already-known», «already in mempool», «already in block chain» o código -27:
     // la transacción está en la red. Enviada, y las monedas siguen gastadas.
-    let casos: [(i64, &str); 5] = [
+    let casos: [(i64, &str); 6] = [
         (1, "txn-already-known"),
         (1, "Transaction already in mempool"),
         (1, "transaction already in block chain"),
         (1, "already in blockchain"),
+        // Bitcoin Core 28+ vía electrs 0.11 (visto en el banco regtest): código 2 y este texto.
+        (2, "Transaction outputs already in utxo set"),
         (-27, "cualquier texto"),
     ];
     for (codigo, mensaje) in casos {

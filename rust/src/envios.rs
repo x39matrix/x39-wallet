@@ -32,7 +32,10 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-const VERSION_FICHERO: u32 = 1;
+/// Versión del fichero lateral. La 1 (misma estructura, solo motores de prueba
+/// anteriores a esta versión) se lee y se vuelve a guardar como 2.
+const VERSION_FICHERO: u32 = 2;
+const VERSIONES_LEGIBLES: [u32; 2] = [1, 2];
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EstadoEnvio {
@@ -151,7 +154,7 @@ impl Registro {
         let envios = match std::fs::read(&ruta) {
             Ok(bytes) => {
                 let f: Fichero = serde_json::from_slice(&bytes).map_err(fichero_err)?;
-                if f.version != VERSION_FICHERO {
+                if !VERSIONES_LEGIBLES.contains(&f.version) {
                     return Err(Error::Fichero(format!(
                         "envíos: versión {} desconocida",
                         f.version

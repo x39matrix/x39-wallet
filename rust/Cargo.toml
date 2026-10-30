@@ -19,5 +19,7 @@ hex = "0.4"
 tempfile = "3.27.0"
 
 [features]
-# Compilación de laboratorio: toda la API pública rechaza mainnet (Error::RedProhibida).
-lab = []
+# Por defecto SOLO redes de prueba (signet, testnet, regtest): toda la API pública rechaza
+# mainnet con Error::RedProhibida. Las features de Cargo suman, no quitan: olvidar un
+# flag nunca puede abrir mainnet. Para una compilación de mainnet: --features mainnet.
+mainnet = []

@@ -23,7 +23,13 @@
 //! difusión incierta. Cancelar algo que ya ha tocado un servidor no libera monedas: es un
 //! REEMPLAZO RBF hacia una dirección propia ([`Billetera::preparar_cancelacion`]).
 //!
-//! Con la feature de Cargo `lab`, toda la API pública rechaza mainnet.
+//! Por defecto solo se permiten redes de prueba (signet, testnet, regtest): toda la API
+//! pública rechaza mainnet con [`Error::RedProhibida`]. Mainnet exige compilar con la
+//! feature de Cargo `mainnet` (las features suman; olvidar un flag no abre mainnet).
+//!
+//! Limitación conocida: un reemplazo (cancelación RBF) no puede reemplazarse a su vez
+//! todavía; si no entra, solo cabe reintentar su difusión o esperar a que confirme él o
+//! la original.
 //!
 //! Esta es la parte que TIENE que ser correcta: derivación, revisión y firma. Se comprueba
 //! con vectores BIP84, verificando la firma del testigo y con un servidor simulado.
@@ -41,16 +47,20 @@ use bdk_wallet::descriptor::{ExtendedDescriptor, IntoWalletDescriptor};
 use bdk_wallet::file_store::Store;
 use bdk_wallet::miniscript::descriptor::{KeyMap, KeyMapWrapper};
 use bdk_wallet::{ChangeSet, KeychainKind, PersistedWallet, SignOptions, Wallet};
-use bitcoin::bip32::{DerivationPath, Xpriv};
+use bitcoin::bip32::Xpriv;
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::hashes::{sha256, Hash};
 use bitcoin::hex::DisplayHex;
 use bitcoin::psbt::Psbt;
-use bitcoin::secp256k1::{Message, Secp256k1};
-use bitcoin::sighash::{EcdsaSighashType, SighashCache};
+use bitcoin::secp256k1::Secp256k1;
 use bitcoin::{
-    absolute::LockTime, transaction::Version, Address, Amount, BlockHash, CompressedPublicKey,
-    FeeRate, Network, OutPoint, Sequence, Transaction, TxIn, TxOut, Txid, Weight, Witness,
+    Address, Amount, BlockHash, FeeRate, Network, OutPoint, Transaction, TxOut, Txid, Weight,
+};
+// Solo los usa la vía antigua, que vive únicamente en las pruebas.
+#[cfg(test)]
+use bitcoin::{
+    absolute::LockTime, bip32::DerivationPath, secp256k1::Message, sighash::EcdsaSighashType,
+    sighash::SighashCache, transaction::Version, CompressedPublicKey, Sequence, TxIn, Witness,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -89,7 +99,7 @@ pub enum Error {
     Red(String),
     /// No se pudo construir el envío (importe bajo el polvo, comisión inválida…).
     Envio(String),
-    /// Red no permitida en esta compilación (feature `lab`: mainnet prohibida).
+    /// Red no permitida en esta compilación (mainnet sin la feature `mainnet`).
     RedProhibida,
     /// El servidor Electrum es de otra red (su `genesis_hash` no es el esperado).
     RedServidor(String),
@@ -168,9 +178,9 @@ impl Red {
         }
     }
 
-    /// Con la feature `lab`, mainnet está prohibida en toda la API pública.
+    /// Sin la feature `mainnet`, mainnet está prohibida en toda la API pública.
     pub fn permitida(self) -> Result<Red, Error> {
-        if cfg!(feature = "lab") && self == Red::Mainnet {
+        if !cfg!(feature = "mainnet") && self == Red::Mainnet {
             return Err(Error::RedProhibida);
         }
         Ok(self)
@@ -203,8 +213,9 @@ fn network_permitida(n: Network) -> Result<Network, Error> {
     }
 }
 
-/// Un fondo que la billetera puede gastar. `indice` es la posición de derivación
-/// de la dirección que lo recibió (rama externa 0). `valor_sat` en satoshis.
+/// Un fondo que la billetera puede gastar (solo para la vía antigua, en pruebas). `indice`
+/// es la posición de derivación de la dirección que lo recibió (rama externa 0).
+#[cfg(test)]
 pub struct Utxo {
     pub txid: String,
     pub vout: u32,
@@ -236,11 +247,13 @@ fn raiz(mnemonico: &[u8], red: Network) -> Result<Xpriv, Error> {
     Xpriv::new_master(red, &seed[..]).map_err(|_| Error::Derivacion)
 }
 
+#[cfg(test)]
 fn ruta(red: Network, cambio: u32, i: u32) -> DerivationPath {
     DerivationPath::from_str(&format!("m/84'/{}'/0'/{}/{}", coin(red), cambio, i))
         .expect("ruta BIP84 válida")
 }
 
+#[cfg(test)]
 fn clave_en(
     secp: &Secp256k1<bitcoin::secp256k1::All>,
     raiz: &Xpriv,
@@ -310,10 +323,11 @@ pub fn direccion_recibir(mnemonico: &[u8], red: Network, i: u32) -> Result<Strin
 
 /// Firma sin red de la versión anterior: construye y FIRMA un envío con los UTXO que
 /// se le den. OJO: el cambio va siempre a la rama interna índice 0 (reutiliza dirección),
-/// por eso esta función NO se expone nunca por FFI. La billetera usa
+/// por eso NO forma parte de la API pública ni del FFI. La billetera usa
 /// `Billetera::preparar_psbt` + `firmar_y_extraer`; esta se conserva porque su test
 /// verifica la firma BIP143 a mano.
-pub fn firmar_envio(
+#[cfg(test)]
+pub(crate) fn firmar_envio(
     mnemonico: &[u8],
     red: Network,
     utxos: &[Utxo],
@@ -431,6 +445,8 @@ fn ya_conocida(e: &electrum_client::Error) -> bool {
                 "already in mempool",
                 "already in block chain",
                 "already in blockchain",
+                // Bitcoin Core 28+ (código RPC -27, que electrs reenvía con otro código):
+                "already in utxo set",
                 "txn-already",
             ]
             .iter()
@@ -520,7 +536,8 @@ pub struct Movimiento {
     pub altura: Option<u32>,
 }
 
-/// Un envío firmado por la vía antigua (`preparar_envio`), listo para difundir.
+/// Un envío firmado por la vía antigua (`preparar_envio`), listo para difundir. Solo en pruebas.
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct Envio {
     pub txid: String,
@@ -622,7 +639,8 @@ impl Billetera {
             pendiente: None,
             envios,
         };
-        b.mantener_gastadas()?;
+        b.mantener_gastadas();
+        b.guardar()?;
         Ok(b)
     }
 
@@ -678,8 +696,12 @@ impl Billetera {
         self.tras_actualizar(cambio)
     }
 
+    /// Tras aplicar una actualización del servidor: mantener gastadas las firmadas sin
+    /// resolver, persistir SIEMPRE la cartera (altura, índices, transacciones) y el
+    /// registro de envíos si cambió.
     fn tras_actualizar(&mut self, envios_cambiados: bool) -> Result<(), Error> {
-        self.mantener_gastadas()?;
+        self.mantener_gastadas();
+        self.guardar()?;
         if envios_cambiados {
             self.envios.guardar()?;
         }
@@ -689,13 +711,10 @@ impl Billetera {
     /// Las transacciones firmadas sin resolver siguen gastadas localmente aunque el
     /// servidor no las haya visto (BDK las desalojaría al sincronizar): se vuelven a
     /// aplicar como no confirmadas con un `seen_at` posterior a cualquier desalojo.
-    fn mantener_gastadas(&mut self) -> Result<(), Error> {
-        let pendientes = self.envios.no_resueltas();
-        if pendientes.is_empty() {
-            return Ok(());
-        }
+    /// No persiste: lo hace quien llama.
+    fn mantener_gastadas(&mut self) {
         let ahora = ahora_s();
-        for (txid, tx) in pendientes {
+        for (txid, tx) in self.envios.no_resueltas() {
             let desalojo = self.cartera.tx_graph().get_last_evicted(txid).unwrap_or(0);
             let visto = ahora
                 .max(desalojo + 1)
@@ -703,7 +722,6 @@ impl Billetera {
             self.cartera.apply_unconfirmed_txs([(Arc::new(tx), visto)]);
             self.envios.anotar_visto(&txid.to_string(), visto);
         }
-        self.guardar()
     }
 
     pub fn saldo(&self) -> Saldo {
@@ -1327,10 +1345,11 @@ impl Billetera {
         self.envios.hex(txid)
     }
 
-    /// Vía ANTIGUA en un solo paso: construye y FIRMA un envío. Se conserva por sus
-    /// pruebas; la app usa `preparar_psbt` + `firmar_y_extraer`. No difunde ni apunta
-    /// estados: eso es `difundir_envio`.
-    pub fn preparar_envio(
+    /// Vía ANTIGUA en un solo paso: construye y FIRMA un envío. Fuera de la API pública;
+    /// se conserva por sus pruebas. La app usa `preparar_psbt` + `firmar_y_extraer`. No
+    /// difunde ni apunta estados: eso es `difundir_envio`.
+    #[cfg(test)]
+    pub(crate) fn preparar_envio(
         &mut self,
         mnemonico: &[u8],
         destino: &str,
@@ -1384,7 +1403,14 @@ impl Billetera {
     }
 
     /// Difunde un envío de la vía antigua y lo apunta como pendiente en la billetera.
-    pub fn difundir_envio(&mut self, servidor: &str, envio: &Envio) -> Result<String, Error> {
+    /// Fuera de la API pública.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn difundir_envio(
+        &mut self,
+        servidor: &str,
+        envio: &Envio,
+    ) -> Result<String, Error> {
         let c = conectar(servidor, self.red, self.espera)?;
         let txid = c.transaction_broadcast(&envio.tx).map_err(red_err)?;
         self.cartera

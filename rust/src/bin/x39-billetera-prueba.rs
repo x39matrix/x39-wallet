@@ -13,6 +13,7 @@
 //!
 //! Uso:
 //!   x39-billetera-prueba crear       <dir> [signet|testnet|regtest]
+//!   x39-billetera-prueba restaurar   <dir>      (recrea estado.dat desde SEMILLA-DE-PRUEBA.txt y escanea)
 //!   x39-billetera-prueba direccion   <dir>
 //!   x39-billetera-prueba sincronizar <dir> [--completo]
 //!   x39-billetera-prueba comision    <dir> [bloques]
@@ -117,8 +118,19 @@ fn informe(b: &Billetera) {
         );
     }
     if let Some(e) = b.envio_en_curso() {
+        let que_hacer = if e.puede_reintentar && e.puede_cancelar {
+            "`difundir` la envía, `cancelar` libera las monedas"
+        } else if e.puede_reintentar && e.puede_reemplazar {
+            "`difundir` reintenta la misma, `cancelar` hace un reemplazo"
+        } else if e.puede_reintentar {
+            "`difundir` reintenta la misma"
+        } else if e.puede_reemplazar {
+            "`cancelar` hace un reemplazo"
+        } else {
+            "esperando a que la red confirme la original o su reemplazo"
+        };
         println!(
-            "ENVÍO SIN RESOLVER: {} ({}) — `difundir` para reintentar o `cancelar`",
+            "ENVÍO SIN RESOLVER: {} ({}) — {que_hacer}",
             e.txid, e.estado
         );
     }
@@ -245,6 +257,23 @@ fn ejecutar(args: &[String]) -> Result<(), String> {
             Billetera::crear(&s, red, &dir.join(ESTADO)).map_err(e)?;
             println!("billetera de prueba creada en {} ({red})", dir.display());
         }
+        "restaurar" => {
+            // Recrea el estado desde la semilla del directorio (como restaurar en otro aparato)
+            // y escanea con gap limit para encontrar direcciones usadas y fondos.
+            let dir = dir.ok_or("falta <dir>")?;
+            let red = red_de(&dir)?;
+            if dir.join(ESTADO).exists() {
+                return Err(format!("{} ya existe; bórralo antes de restaurar", dir.join(ESTADO).display()));
+            }
+            let srv = servidor_anunciado(red)?;
+            let mut b = {
+                let s = leer_semilla(&dir)?;
+                Billetera::crear(&s, red, &dir.join(ESTADO)).map_err(e)?
+            };
+            println!("estado recreado desde la semilla; escaneo completo…");
+            b.escanear(&srv).map_err(e)?;
+            informe(&b);
+        }
         "direccion" => {
             let dir = dir.ok_or("falta <dir>")?;
             let mut b = Billetera::abrir(&dir.join(ESTADO), red_de(&dir)?).map_err(e)?;
@@ -363,7 +392,7 @@ fn ejecutar(args: &[String]) -> Result<(), String> {
         }
         _ => {
             return Err(
-                "orden desconocida (crear, direccion, sincronizar, comision, enviar, envios, difundir, cancelar)".into(),
+                "orden desconocida (crear, restaurar, direccion, sincronizar, comision, enviar, envios, difundir, cancelar)".into(),
             )
         }
     }
