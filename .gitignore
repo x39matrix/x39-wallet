@@ -1,0 +1,22 @@
+# Compilación
+rust/target/
+android/.gradle/
+android/build/
+android/*/build/
+android/local.properties
+nodebridge/.gradle/
+nodebridge/build/
+nodebridge/*/build/
+*.bak
+*.bak-*
+
+# Nunca en el repo: estado de billeteras, semillas, PSBT, claves
+*.dat
+estado*.dat
+SEMILLA*
+*.psbt
+*.key
+*.pem
+*.jks
+*.keystore
+local.properties
