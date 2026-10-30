@@ -31,7 +31,7 @@
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use x39_wallet::{
+use x39wallet::{
     altura_red, estimar_comision, nueva_semilla, Billetera, EnvioInfo, EstadoEnvio, PsbtPendiente,
     Red,
 };
@@ -227,7 +227,7 @@ fn ejecutar(args: &[String]) -> Result<(), String> {
     let (pos, completo, sin_difundir, max_comision) = opciones(args);
     let orden = pos.get(1).map(String::as_str).unwrap_or("");
     let dir = pos.get(2).map(PathBuf::from);
-    let e = |x: x39_wallet::Error| x.to_string();
+    let e = |x: x39wallet::Error| x.to_string();
     match orden {
         "crear" => {
             let dir = dir.ok_or("falta <dir>")?;

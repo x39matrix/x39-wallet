@@ -310,6 +310,63 @@ fn firmar_exige_la_semilla_de_esta_billetera() {
 }
 
 #[test]
+fn una_sola_billetera_por_fichero_en_el_proceso() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("b.dat");
+    let b1 = Billetera::crear(mn(), Red::Signet, &f).unwrap();
+    // Segunda instancia sobre el mismo fichero: no.
+    assert_eq!(
+        Billetera::abrir(&f, Red::Signet).err(),
+        Some(Error::Fichero("ya abierta en este proceso".into()))
+    );
+    // Por otra ruta equivalente al mismo fichero, tampoco.
+    let otra_ruta = dir.path().join(".").join("b.dat");
+    assert_eq!(
+        Billetera::abrir(&otra_ruta, Red::Signet).err(),
+        Some(Error::Fichero("ya abierta en este proceso".into()))
+    );
+    // Por un enlace simbólico al mismo fichero, tampoco.
+    #[cfg(unix)]
+    {
+        let enlace = dir.path().join("enlace.dat");
+        std::os::unix::fs::symlink(&f, &enlace).unwrap();
+        assert_eq!(
+            Billetera::abrir(&enlace, Red::Signet).err(),
+            Some(Error::Fichero("ya abierta en este proceso".into()))
+        );
+        // Y crear sobre un enlace simbólico, aunque esté colgando, se niega.
+        let colgando = dir.path().join("colgando.dat");
+        std::os::unix::fs::symlink(dir.path().join("no-existe.dat"), &colgando).unwrap();
+        assert_eq!(
+            Billetera::crear(mn(), Red::Signet, &colgando).err(),
+            Some(Error::Fichero("la ruta es un enlace simbólico".into()))
+        );
+        assert_eq!(
+            Billetera::crear(mn(), Red::Signet, &enlace).err(),
+            Some(Error::Fichero("la ruta es un enlace simbólico".into()))
+        );
+    }
+    // Soltar la primera libera el fichero.
+    drop(b1);
+    let b2 = Billetera::abrir(&f, Red::Signet).unwrap();
+    drop(b2);
+    // Un crear que falla (fichero existente) no deja el fichero reservado.
+    assert!(matches!(
+        Billetera::crear(mn(), Red::Signet, &f),
+        Err(Error::Fichero(_))
+    ));
+    assert!(Billetera::abrir(&f, Red::Signet).is_ok());
+    assert_eq!(
+        REDES_PERMITIDAS,
+        if cfg!(feature = "mainnet") {
+            "x39wallet-redes=mainnet"
+        } else {
+            "x39wallet-redes=solo-prueba"
+        }
+    );
+}
+
+#[test]
 fn red_desde_texto() {
     assert_eq!("signet".parse::<Red>().unwrap(), Red::Signet);
     assert_eq!("testnet".parse::<Red>().unwrap(), Red::Testnet);

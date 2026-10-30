@@ -46,7 +46,7 @@ const VERSION_FICHERO: u32 = 3;
 /// histórica por rechazo (solo pudo producirla el laboratorio) se carga tal cual.
 const VERSIONES_LEGIBLES: [u32; 3] = [1, 2, 3];
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
 pub enum EstadoEnvio {
     Firmada,
     Difundiendo,
@@ -72,7 +72,7 @@ impl std::fmt::Display for EstadoEnvio {
 }
 
 /// Todo lo que se sabe de un envío firmado. Tipo PLANO: la transacción cruda no sale.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, uniffi::Record)]
 pub struct EnvioInfo {
     /// Id del PSBT pendiente del que salió.
     pub id: String,

@@ -1,0 +1,4 @@
+# Compilador fijado para que un tercero reproduzca la compilación con exactamente el mismo.
+[toolchain]
+channel = "1.98.1"
+targets = ["aarch64-linux-android"]

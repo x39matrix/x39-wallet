@@ -20,3 +20,7 @@ SEMILLA*
 *.jks
 *.keystore
 local.properties
+
+# Salidas de android/build-native.sh: se regeneran desde el script; la suma está en el lock
+android/wallet/src/main/jniLibs/
+android/wallet/src/main/java/x39/wallet/x39wallet.kt

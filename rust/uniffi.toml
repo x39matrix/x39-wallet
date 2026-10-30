@@ -1,0 +1,4 @@
+# Configuración de los bindings generados por uniffi-bindgen (modo --library).
+[bindings.kotlin]
+package_name = "x39.wallet"
+cdylib_name = "x39wallet"

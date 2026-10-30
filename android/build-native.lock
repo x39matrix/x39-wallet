@@ -1,0 +1,6 @@
+libx39wallet.so  sha256 41318ce0b3da9651135f7a8aa779a8e5eb7f650606466ee9beb0905e1185ee1c  bytes 9322832
+ndk 30.0.16248370 (API mínima del NDK 21, --platform 21)
+clang Android (16134705, +pgo, +bolt, +lto, +mlgo, based on r574158c) clang version 21.0.0 (https://android.googlesource.com/toolchain/llvm-project 9f872551d3c681d06fd303b36f16ed5c274735eb)
+rustc 1.98.1  cargo-ndk 4.1.2  uniffi 0.32.2  target aarch64-linux-android  abi arm64-v8a
+rustflags --remap-path-prefix=$HOME=/build --remap-path-prefix=<repo>=/build/x39-wallet -C link-arg=-Wl,-z,max-page-size=16384
+bindings kotlin: android/wallet/src/main/java/x39/wallet/x39wallet.kt 

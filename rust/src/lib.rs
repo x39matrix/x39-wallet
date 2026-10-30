@@ -40,6 +40,10 @@
 //! con vectores BIP84, verificando la firma del testigo y con un servidor simulado.
 
 pub mod envios;
+pub mod ffi;
+
+// Andamiaje de UniFFI (debe ir en la raíz del crate).
+uniffi::setup_scaffolding!();
 #[cfg(test)]
 pub(crate) mod mock_electrum;
 
@@ -68,14 +72,24 @@ use bitcoin::{
     sighash::SighashCache, transaction::Version, CompressedPublicKey, Sequence, TxIn, Witness,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
-use std::path::Path;
+use std::collections::{BTreeSet, HashSet};
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
 
 pub const POLVO_SAT: u64 = 546;
+
+/// Marcador legible dentro de la biblioteca compilada: qué redes permite esta compilación.
+/// `android/build-native.sh` exige el primero y prohíbe el segundo tras el strip.
+#[cfg(not(feature = "mainnet"))]
+pub const REDES_PERMITIDAS: &str = "x39wallet-redes=solo-prueba";
+#[cfg(feature = "mainnet")]
+pub const REDES_PERMITIDAS: &str = "x39wallet-redes=mainnet";
+#[used]
+static MARCADOR_REDES: &[u8] = REDES_PERMITIDAS.as_bytes();
 
 /// Passphrase BIP39: fija a la cadena vacía en esta versión.
 pub const PASSPHRASE: &str = "";
@@ -90,7 +104,8 @@ pub const CADUCIDAD_PSBT: Duration = Duration::from_secs(10 * 60);
 /// Espera por defecto en las llamadas al servidor.
 pub const ESPERA_RED: Duration = Duration::from_secs(30);
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, uniffi::Error)]
+#[uniffi(flat_error)]
 pub enum Error {
     Semilla,
     Derivacion,
@@ -145,7 +160,7 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// Red en la que trabaja la billetera. Las pruebas van SIEMPRE en signet o regtest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, uniffi::Enum)]
 #[serde(rename_all = "lowercase")]
 pub enum Red {
     Signet,
@@ -519,7 +534,7 @@ pub fn estimar_comision(red: Red, servidor: &str, bloques: usize) -> Result<f64,
 // ===== Billetera con estado ===================================================
 
 /// Saldo en satoshis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
 pub struct Saldo {
     /// Confirmado y gastable.
     pub confirmado: u64,
@@ -531,7 +546,7 @@ pub struct Saldo {
 }
 
 /// Un movimiento de la billetera.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, uniffi::Record)]
 pub struct Movimiento {
     pub txid: String,
     pub recibido_sat: u64,
@@ -557,7 +572,7 @@ pub struct Envio {
 
 /// Lo que el usuario REVISA antes de firmar. Inmutable: lo que se firme tiene que ser
 /// exactamente esto, y `firmar_y_extraer` lo re-verifica. El PSBT crudo se queda dentro.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct PsbtPendiente {
     /// Identificador aleatorio del pendiente; es lo único que cruza el FFI.
     pub id: String,
@@ -588,10 +603,57 @@ struct Pendiente {
     creado: Instant,
 }
 
+/// Ficheros de estado con una `Billetera` viva en este proceso: una sola instancia por
+/// fichero (dos instancias escribirían el mismo estado sin verse).
+static ABIERTAS: Mutex<Option<HashSet<PathBuf>>> = Mutex::new(None);
+
+/// Clave del registro: si el fichero existe, su ruta canónica COMPLETA (resuelve también
+/// enlaces simbólicos del propio fichero); si no existe aún, directorio canónico + nombre.
+/// La protección es por ruta canónica dentro del mismo proceso; no cubre otros procesos.
+fn clave_fichero(fichero: &Path) -> PathBuf {
+    if let Ok(c) = fichero.canonicalize() {
+        return c;
+    }
+    let padre = fichero
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let padre = padre.canonicalize().unwrap_or_else(|_| padre.to_path_buf());
+    padre.join(fichero.file_name().unwrap_or_default())
+}
+
+fn registrar_abierta(fichero: &Path) -> Result<PathBuf, Error> {
+    let clave = clave_fichero(fichero);
+    let mut g = ABIERTAS.lock().unwrap_or_else(|p| p.into_inner());
+    let conjunto = g.get_or_insert_with(HashSet::new);
+    if !conjunto.insert(clave.clone()) {
+        return Err(Error::Fichero("ya abierta en este proceso".into()));
+    }
+    Ok(clave)
+}
+
+fn dar_de_baja(clave: &Path) {
+    let mut g = ABIERTAS.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(c) = g.as_mut() {
+        c.remove(clave);
+    }
+}
+
+/// Reserva del fichero en el registro; se libera al soltarse (también si crear/abrir fallan
+/// a medias).
+struct Reserva(PathBuf);
+impl Drop for Reserva {
+    fn drop(&mut self) {
+        dar_de_baja(&self.0);
+    }
+}
+
 pub struct Billetera {
     cartera: PersistedWallet<Store<ChangeSet>>,
     almacen: Store<ChangeSet>,
     red: Network,
+    /// Reserva del fichero: se da de baja al soltar la billetera.
+    _reserva: Reserva,
     espera: Duration,
     pendiente: Option<Pendiente>,
     envios: envios::Registro,
@@ -602,6 +664,14 @@ impl Billetera {
     /// Falla si el fichero ya existe. Tras restaurar, `escanear` para encontrar fondos.
     pub fn crear(mnemonico: &[u8], red: Red, fichero: &Path) -> Result<Self, Error> {
         let net = red.permitida()?.network();
+        // Un enlace simbólico (aunque esté colgando) no vale como fichero de estado nuevo.
+        if std::fs::symlink_metadata(fichero)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return Err(Error::Fichero("la ruta es un enlace simbólico".into()));
+        }
+        let reserva = Reserva(registrar_abierta(fichero)?);
         if fichero.exists() {
             return Err(Error::Fichero("ya existe; usa abrir()".into()));
         }
@@ -617,6 +687,7 @@ impl Billetera {
             cartera,
             almacen,
             red: net,
+            _reserva: reserva,
             espera: ESPERA_RED,
             pendiente: None,
             envios,
@@ -628,6 +699,7 @@ impl Billetera {
     /// los envíos firmados sin resolver (sus monedas siguen gastadas localmente).
     pub fn abrir(fichero: &Path, red: Red) -> Result<Self, Error> {
         let net = red.permitida()?.network();
+        let reserva = Reserva(registrar_abierta(fichero)?);
         let (mut almacen, _) =
             Store::<ChangeSet>::load(MAGIA, fichero).map_err(|e| Error::Fichero(e.to_string()))?;
         let cartera = Wallet::load()
@@ -640,6 +712,7 @@ impl Billetera {
             cartera,
             almacen,
             red: net,
+            _reserva: reserva,
             espera: ESPERA_RED,
             pendiente: None,
             envios,

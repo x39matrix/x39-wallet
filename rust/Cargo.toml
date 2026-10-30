@@ -5,6 +5,19 @@ edition = "2021"
 description = "Billetera Bitcoin de autocustodia (BIP39/BIP84, BDK, Electrum) — motor en Rust"
 publish = false
 
+[lib]
+# cdylib: libx39wallet.so para Android (UniFFI); rlib: el binario de pruebas y las pruebas.
+name = "x39wallet"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[[bin]]
+# Generador de bindings de UniFFI, compilado desde este mismo crate para que los bindings
+# salgan de la MISMA compilación que la biblioteca: `cargo run --features uniffi/cli --bin uniffi-bindgen`.
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+required-features = ["uniffi/cli"]
+
 [dependencies]
 bitcoin = { version = "0.32", features = ["std", "rand-std"] }
 bip39 = { version = "2.2", features = ["rand", "zeroize"] }
@@ -13,6 +26,8 @@ bdk_electrum = "0.24"
 zeroize = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Versión fijada EXACTA: los bindings generados y la biblioteca deben venir del mismo uniffi.
+uniffi = { version = "=0.32.2" }
 
 [dev-dependencies]
 hex = "0.4"
@@ -23,3 +38,10 @@ tempfile = "3.27.0"
 # mainnet con Error::RedProhibida. Las features de Cargo suman, no quitan: olvidar un
 # flag nunca puede abrir mainnet. Para una compilación de mainnet: --features mainnet.
 mainnet = []
+
+[profile.release]
+# Sin información de depuración. Los símbolos NO se quitan aquí: uniffi-bindgen en modo
+# --library lee sus metadatos de la tabla de símbolos de la MISMA biblioteca que se empaqueta;
+# android/build-native.sh genera los bindings y después quita los símbolos con llvm-strip.
+strip = false
+debug = false
