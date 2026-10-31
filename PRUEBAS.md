@@ -869,8 +869,57 @@ paquete por QR (B dos veces, C y D) más un QR que no era paquete; tres importac
 probar: la rama «permiso de cámara denegado», la adopción contra un nodo propio en signet y el
 túnel propio, que no existe (E-3).
 
+## 7. Criterios de salida a mainnet
+
+Definición de «lista para dinero real». Cada criterio o pasa o no pasa; no hay «casi». Dos
+grupos: los **bloqueantes** tocan fondos y tienen que estar los cinco **resueltos**: cada uno
+en «HECHO» con su evidencia, o como **excepción** expresa, registrada en este documento y
+aceptada por escrito por el usuario, que declare el riesgo residual. Una excepción **no** es un
+criterio demostrado y se distingue de él; sin una de las dos para los cinco, no se va a
+mainnet. Los **opcionales** no bloquean y son hoja de ruta. Estado a 31/10/2026, contrastado
+con lo que registran las secciones anteriores y las pruebas del repo; «hecho» solo cuando hay
+una prueba o un recorrido anotado que lo demuestre.
+
+### 7.1 Bloqueantes
+
+| # | Criterio | Qué demuestra | Cómo se demuestra | Estado hoy |
+|---|---|---|---|---|
+| B1 | **Contrato de difusión incierta de punta a punta en signet contra un nodo PROPIO** | Que una difusión nunca deja la billetera en un estado que pierda o libere monedas por error: `Difundiendo` se persiste **antes** de transmitir; un corte entre transmitir y anotar recupera como `Incierta`; ningún rechazo del servidor libera monedas (todo a `Incierta`); «already known» / «already in mempool» / «already in block chain» / «already in utxo set» / `txn-already` → `Enviada`; cancelar, **cuando ya hubo** un intento de difusión, = reemplazo RBF sobre las mismas entradas; una transacción solo firmada y nunca difundida se cancela descartándola, sin RBF (es la única liberación automática, §1) | Motor, `rust/src/tests.rs` contra el simulado: `regtest_corte_entre_transmitir_y_anotar_deja_incierta`, `regtest_difusion_incierta_nunca_reconstruye_y_reintenta_la_misma`, `regtest_ya_conocida_es_exito_y_no_libera`, `regtest_cancelar_tras_difundir_es_un_reemplazo_rbf`, `regtest_si_confirma_la_original_el_reemplazo_queda_fallido`, `regtest_cancelada_que_aparece_en_un_bloque_pasa_a_confirmada`, `regtest_firmada_sin_difundir_se_puede_cancelar` (§1); banco regtest real con electrs (§2: difusión, «ya conocida» difundiendo por fuera, RBF); en signet desde el aparato, §5.1. Falta el recorrido **punta a punta en signet contra un nodo propio**: envío, corte provocado durante la difusión, rechazo provocado, reintento de la misma, cancelación por RBF, todo anotado como §5.1 | **PENDIENTE** (parcial): hecho en simulado y en el banco regtest; en signet solo el camino feliz (§5.1) y solo contra el servidor público; no existe todavía un nodo propio en signet (el propio es mainnet, §5.2) |
+| B2 | **Recuperación desde la semilla** | Que una instalación limpia con solo las 12 palabras recupera saldo e historial, y que el registro de envíos no miente: lo que el servidor muestra vuelve como movimientos; lo firmado o incierto anterior **no** se recupera desde la semilla (limitación documentada en el crate y en el README) y la app lo dice | Motor, §2.1: restauración limpia en regtest con el mismo saldo y los mismos movimientos, registro de envíos vacío; Android, §4: `RecuperacionYEscaneoInstrumentadoTest` (restaurar sin servidor deja escaneo pendiente, se niega a preparar envíos y se completa al sincronizar; recuperar la clave no toca estado ni envíos). Falta: **instalación limpia en el aparato** (desinstalar, instalar, restaurar con las 12 palabras en signet) con saldo e historial iguales a los de §5.1, y el texto que explica qué no vuelve | **PENDIENTE** (parcial): hecho en línea de órdenes (regtest) y en instrumentadas; no hecho en el aparato con instalación limpia |
+| B3 | **Firma: autenticación por operación; la semilla no sale del búfer y se borra tras usarla** | Que cada firma exige al usuario (biometría fuerte o credencial) y que el mnemónico cruza a Rust como búfer directo que Kotlin pone a cero, nunca como `String` | Android, §4: `AlmacenSemillaInstrumentadoTest.laClaveExigeAutenticacionPorOperacion` (parámetros reales de la clave; sin autenticar no cifra); `MnemonicoTest` (JVM): borrado de la entrada en `deChars` y de la semilla nueva; `BilleterasInstrumentadoTest.nuevaSemilla_docePalabras_yCreaBilleteraConByteBufferDirecto`; prompt biométrico real en los recorridos de §5 y §5.1 (no se automatiza). Límite **documentado y no resuelto** (README, «Límites conocidos», apartado «Semilla nueva»): UniFFI deja en memoria nativa copias de la semilla que **no se ponen a cero** (el `Vec` entregado al serializador y el `RustBuffer` que Kotlin libera sin borrar) | **PENDIENTE (decisión)**. Hecho: autenticación por operación y borrado de los búferes controlados. **No cumplido**: «la semilla se borra tras usarla», porque quedan copias de la semilla sin borrar en memoria nativa; no se marca como borrado total conseguido. Decisión antes de mainnet, dos vías: (a) implementar el `Lower` a mano del README, y que cubra **también** el búfer final de UniFFI (si lo deja intacto, no basta); o (b) aceptarlo como **excepción expresa y registrada** en este documento, dicha como lo que es, copias de la semilla que no se borran, nunca como criterio cumplido. Recomendación anotada: corregirlo, por ser la semilla |
+| B4 | **Puerta del nodo no evitable** (huella SPKI en el apretón TLS → génesis → protocolo 1.4 → altura que no baja; es el orden de `Conexion::abrir` y `comprobar_nodo` en `rust/src/nodo.rs`) | Que ninguna operación de red (escaneo, sincronización, difusión, altura, comisión) habla con un servidor de otra red, con otro certificado, que haya retrocedido o con otro protocolo; y que no hay camino que se la salte | Positivas: motor (`nodo_tls_con_huella_correcta_es_sano_y_la_billetera_sincroniza_por_el`, `nodo_la_huella_viaja_en_altura_y_comision`), §5 y §5.2 en el aparato. Negativas que **ya existen**: huella incorrecta (`nodo_tls_con_huella_incorrecta_se_rechaza_sin_tocar_nada`, `signet_publico_con_huella_equivocada_se_rechaza_tambien_en_comision`, `NodeBridgeInstrumentadoTest`), otra red (`nodo_corte_tras_validar_genesis_y_otra_red_al_volver`, la ignorada de signet, las de §1). Negativas que **faltan**: servidor que anuncia protocolo distinto de 1.4; servidor cuya altura retrocede respecto a la vista; y una batería ordenada, puerta por puerta y operación por operación, que afirme que el rechazo **conserva el estado íntegro y coherente**, distinguiendo dos casos: si la validación falla **antes** de transmitir, no se tocan ni los fondos ni el fichero de envíos (estado y registro idénticos byte a byte a los de antes); si la difusión **ya empezó**, el estado pasa a `Incierta` y las monedas siguen **reservadas**, nunca liberadas. Exigencia añadida: comprobar el nodo y después abrir **otra** conexión no demuestra nada; la batería debe demostrar que **cada** operación de red (escaneo, sincronización, difusión, altura, comisión) viaja por una conexión que pasó **todas** las puertas, no por una conexión aparte sin comprobar (hoy `Conexion::abrir` corre génesis y huella en cada conexión, pero altura y protocolo solo los corre `comprobar_nodo`; la batería tiene que dejar esto demostrado o corregido) | **PENDIENTE**: la batería negativa completa está por escribir (hoy cubre huella y red; no protocolo ni altura que baja, ni la conservación del estado caso por caso, ni la prueba de que cada operación viaja por una conexión comprobada). Las puertas existen y corren (§5.2 lo vio en real) |
+| B5 | **Build reproducible verificado: dos compilaciones, mismo hash; alineación de 16 KB** | Que un tercero puede recompilar la biblioteca nativa y obtener el mismo binario que va en el APK, y que los segmentos LOAD están a 16 KB | `android/build-native.sh --verificar` (compilación limpia en directorio temporal y comparación con `build-native.lock`); la comprobación de LOAD la hace el script en cada compilación | **HECHO una vez, PENDIENTE para la biblioteca vigente**: §4 lo verificó para la biblioteca de la fase D (`6936ed89…`, 9.325.968 bytes, REPRODUCIBLE); la vigente (`abe7822e…`, 9.428.864 bytes, E-2) tiene el lock actualizado pero no consta una pasada de `--verificar` en este documento. Hay que repetirla sobre la vigente y sobre cada biblioteca que vaya a un release; con E-3 entran `ring`, boringtun y smoltcp (`docs/e3-tunel-propio.md` §8) |
+
+Regla de cierre: los cinco **resueltos** sobre el **binario candidato**: cada bloqueante en
+«HECHO» con su evidencia anotada en este documento, o como **excepción** expresa, registrada
+en este documento y aceptada por escrito por el usuario, que declare el riesgo residual. Una
+excepción no es un criterio demostrado y se distingue de él; sin una de las dos para los
+cinco, no se va a mainnet. El candidato es «mainnet habilitado» (compilado con la feature
+`mainnet`; marcador `x39wallet-redes=mainnet` en la biblioteca), pero la red se elige en
+**tiempo de ejecución** (`rust/src/lib.rs`: con la feature, `Red::permitida` admite signet,
+regtest y mainnet), así que **ese mismo binario** se ejercita en signet y regtest sin dinero
+real; signet y mainnet no son binarios distintos. La evidencia que cuenta: el binario candidato
+(mainnet habilitado) probado en signet y regtest; las pruebas unitarias sobre el **mismo**
+código y las **mismas** opciones de compilación (`cargo test --features mainnet`, como ya hace
+§1); las integradas e instrumentadas cargando la biblioteca **exacta** del APK candidato; y
+todo identificado por opciones de compilación y hashes (los del `build-native.lock` y del APK).
+Un criterio verificado sobre otra biblioteca, otras opciones u otro commit no cuenta.
+
+### 7.2 Opcionales (hoja de ruta, no bloquean mainnet)
+
+| Qué | Estado hoy |
+|---|---|
+| Túnel propio (E-3) | **Diseño** confirmado en `docs/e3-tunel-propio.md`; viabilidad de compilación medida (§8.1 de ese documento); sin código |
+| Las tres mejoras menores de §5.2 (quitar «(os error 111)» del texto al usuario; atajo a Emparejar desde los ajustes del nodo; nombre del nodo emparejado en Ajustes) | Anotadas, sin hacer |
+| Rama «permiso de cámara denegado» | Sin probar (§5.2) |
+| Multifirma | Sin diseño ni plan; fuera de esta versión |
+
 ## 3. Pendiente de probar
 
-- Envío real en **signet** desde la app en el Redmi (sección 5); la billetera de prueba de línea de
-  órdenes `~/x39-wallet-prueba-signet` sigue a cero (sin faucet).
-- Las pantallas Android en el aparato una por una, el ciclo completo desde la app (fase G) y NodeBridge.
+- Envío real en **signet** desde la app en el aparato: **hecho** (§5.1, 10.000 sat, bloque
+  328731); la billetera de prueba de línea de órdenes `~/x39-wallet-prueba-signet` recibió
+  esos 10.000 sat y ya no está a cero. Lo que sigue pendiente en red real lo lista §7: B1
+  contra un nodo propio en signet, B2 con instalación limpia en el aparato, B4 batería
+  negativa, B5 `--verificar` sobre la biblioteca vigente, y la decisión de B3.
+- Las pantallas Android en el aparato: recorridas en parte (§5, §5.1, §5.2, incluido NodeBridge
+  por emparejamiento); el ciclo completo desde la app (fase G) sigue pendiente.
