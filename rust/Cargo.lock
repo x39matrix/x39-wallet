@@ -1310,6 +1310,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "uniffi",
+ "webpki-roots",
  "zeroize",
 ]
 

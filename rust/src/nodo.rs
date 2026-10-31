@@ -1,23 +1,47 @@
 //! Conexión con el nodo del usuario: TLS con huella fijada, comprobaciones en orden.
 //!
-//! Orden REAL de las comprobaciones en cada conexión y reconexión (`Conexion::abrir` y
-//! `comprobar_nodo`):
+//! Orden REAL de las comprobaciones en CADA conexión y reconexión (`Conexion::abrir`; la
+//! sonda `comprobar_nodo` no hace nada que no haga cualquier otra conexión):
 //! 1. identidad del servidor (solo con `ssl://` y huella): el SPKI del certificado debe tener
 //!    la huella esperada; se comprueba DENTRO del apretón de manos TLS, antes de que viaje
 //!    ningún dato de aplicación. Sin huella y con `ssl://`, el certificado se valida contra
 //!    las raíces públicas (CA, nombre y caducidad); CON huella no se valida nada más que el
 //!    SPKI: ni CA, ni nombre, ni caducidad (la huella sustituye a la CA).
-//! 2. red correcta (`genesis_hash` del servidor = génesis de la red pedida),
-//! 3. `server.version`: protocolo Electrum 1.4 y latencia,
-//! 4. altura no inferior a la última conocida.
+//! 2. `server.version`, PRIMER mensaje Electrum de la sesión, como exige la especificación
+//!    (un servidor estricto corta cualquier RPC anterior): protocolo Electrum 1.4 (por
+//!    componentes: «1», «4» y, si hay tercero, solo dígitos; «1.40» o «1.4basura» no valen) y
+//!    latencia,
+//! 3. red correcta (`genesis_hash` del servidor = génesis de la red pedida),
+//! 4. altura no inferior a la última conocida (`altura_minima`; el que llama la pasa: la
+//!    billetera, la suya; la sonda, la que le dan), y de ahí en adelante no inferior a la
+//!    MÁXIMA que el propio servidor haya anunciado en esta sesión (marca atómica, ver
+//!    `Vigilado`). bdk_electrum ignora en silencio un tip menor que el local, así que la
+//!    compara el motor, aquí, antes de operar.
+//!
+//! Nada de esto se cachea entre conexiones: cada conexión se valida a sí misma, aunque cueste
+//! un par de peticiones más. Una operación nunca viaja por una conexión que no haya pasado
+//! las cuatro puertas.
 //!
 //! La huella viaja en TODAS las operaciones de red (escaneo, sincronización, difusión,
 //! altura, comisión, comprobación): no hay ninguna que abra conexión sin ella.
 //!
-//! El cliente «normal» (tcp:// y ssl:// con raíces públicas) se crea con `retry(0)`: un
-//! reintento interno del cliente Electrum reabriría el socket y repetiría el RPC SIN volver a
-//! comprobar la red. Cualquier reintento lo hace la capa de arriba repitiendo TODA la
-//! validación (apertura de `Conexion` nueva, génesis incluido).
+//! Transporte: el motor abre el flujo ÉL MISMO en los tres casos (`tcp://`; `ssl://` con
+//! raíces públicas; `ssl://` con huella) y lo envuelve con `RawClient::from`, que no negocia
+//! nada por su cuenta. No se usa `electrum_client::Client`: ese cliente negocia
+//! `server.version` solo, proponiendo el rango 1.4–1.6, guarda la respuesta en un campo privado
+//! sin lector y no la compara con nada; con él habría dos negociaciones por sesión (un servidor
+//! estricto rechaza la segunda) y el servidor podría negociar 1.6 sin que el motor lo viera.
+//! Aquí hay UNA negociación por sesión, la del motor, que propone «1.4» a secas y valida la
+//! versión efectivamente negociada. Tampoco hay reintentos internos: un reintento reabriría el
+//! socket y repetiría el RPC sin volver a pasar las puertas; cualquier reintento lo hace la
+//! capa de arriba abriendo una `Conexion` nueva.
+//!
+//! Vigilancia durante BDK: `BdkElectrumClient` recibe el cliente envuelto en `Vigilado`, que
+//! comprueba CADA respuesta de `blockchain.headers.subscribe` (también las que pide BDK dentro
+//! de un escaneo o sincronización) contra `altura_minima` y corta en el acto. bdk_electrum
+//! conserva en silencio el checkpoint local cuando el servidor anuncia un tip menor, así que
+//! una altura inferior recibida a mitad de sesión solo se detecta aquí, antes de que el
+//! resultado llegue a `envios.observar`, `apply_update` o cualquier persistencia.
 //!
 //! Política «ssl:// exige huella salvo el servidor público de signet»: la impone la capa
 //! Kotlin (`ConfigNodo.invalida()`), no el motor; el motor acepta `ssl://` sin huella
@@ -26,17 +50,24 @@
 
 use crate::{network_permitida, red_err, Error, Red, ESPERA_RED};
 use bdk_electrum::electrum_client::raw_client::RawClient;
-use bdk_electrum::electrum_client::{self, Client, ConfigBuilder, ElectrumApi};
+use bdk_electrum::electrum_client::{
+    self, Batch, BroadcastPackageRes, ElectrumApi, EstimationMode, GetBalanceRes, GetHeadersRes,
+    GetHistoryRes, GetMerkleRes, ListUnspentRes, MempoolInfoRes, Param, RawHeaderNotification,
+    ScriptStatus, ServerFeaturesRes, TxidFromPosRes,
+};
 use bdk_electrum::BdkElectrumClient;
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::hashes::{sha256, Hash};
 use bitcoin::hex::{DisplayHex, FromHex};
-use bitcoin::{BlockHash, Network};
+use bitcoin::{BlockHash, Network, Script, Txid};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{ClientConfig, ClientConnection, DigitallySignedStruct, StreamOwned};
+use rustls::pki_types::{CertificateDer, Der, ServerName, TrustAnchor, UnixTime};
+use rustls::{ClientConfig, ClientConnection, DigitallySignedStruct, RootCertStore, StreamOwned};
+use std::borrow::Borrow;
+use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -177,57 +208,420 @@ impl ServerCertVerifier for VerificadorHuella {
 
 type FlujoTls = StreamOwned<ClientConnection, TcpStream>;
 
-/// Una conexión Electrum ya comprobada (red y, si procede, huella).
-pub(crate) enum Conexion {
-    /// `tcp://`, o `ssl://` validado contra las raíces públicas (electrum-client).
-    Normal(BdkElectrumClient<Client>),
-    /// `ssl://` con huella SPKI fijada (TLS propio).
-    Pinada(BdkElectrumClient<RawClient<FlujoTls>>, [u8; 32]),
+/// Flujo de bytes con el servidor, abierto por el motor: TCP a secas o TLS (con raíces
+/// públicas o con huella fijada; la diferencia está en cómo se abrió, no en el tipo).
+pub(crate) enum Flujo {
+    Plano(TcpStream),
+    Tls(FlujoTls),
 }
 
-macro_rules! con_api {
-    ($self:expr, |$c:ident| $e:expr) => {
-        match $self {
-            Conexion::Normal($c) => $e,
-            Conexion::Pinada($c, _) => $e,
+impl Read for Flujo {
+    fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Flujo::Plano(s) => s.read(b),
+            Flujo::Tls(s) => s.read(b),
         }
-    };
+    }
+}
+
+impl Write for Flujo {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Flujo::Plano(s) => s.write(b),
+            Flujo::Tls(s) => s.write(b),
+        }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Flujo::Plano(s) => s.flush(),
+            Flujo::Tls(s) => s.flush(),
+        }
+    }
+}
+
+const METODO_ALTURA: &str = "blockchain.headers.subscribe";
+
+/// Cliente Electrum vigilado: delega todo en el cliente interno y comprueba CADA altura que el
+/// servidor anuncia (`blockchain.headers.subscribe`, la pida el motor o la pida BDK) contra la
+/// MARCA de altura máxima vista: empieza en la altura mínima que da quien abre la conexión y
+/// sube con cada altura anunciada. Una altura inferior a la marca (a lo que ya se había visto
+/// antes de la sesión, o a lo que el propio servidor anunció en ella) corta la llamada en el
+/// acto con el error de la puerta, así que BDK no llega a devolver un resultado que el motor
+/// pudiera aplicar o persistir.
+pub(crate) struct Vigilado<E> {
+    interno: E,
+    marca: AtomicU32,
+}
+
+impl<E> Vigilado<E> {
+    pub(crate) fn nuevo(interno: E, altura_minima: u32) -> Vigilado<E> {
+        Vigilado {
+            interno,
+            marca: AtomicU32::new(altura_minima),
+        }
+    }
+
+    /// Comprobación y actualización de la marca en UN solo paso atómico: `fetch_max` sube la
+    /// marca si procede y devuelve el valor previo; la altura recibida tiene que ser al menos
+    /// ese valor previo. Nada de leer, comparar y escribir por separado.
+    pub(crate) fn comprobar_altura(&self, altura: usize) -> Result<(), electrum_client::Error> {
+        let h = u32::try_from(altura).map_err(|_| {
+            electrum_client::Error::Message(format!("altura {altura} fuera de rango"))
+        })?;
+        let previa = self.marca.fetch_max(h, Ordering::Relaxed);
+        if h < previa {
+            return Err(electrum_client::Error::Message(format!(
+                "el servidor va por detrás: altura {h}, ya se había visto {previa}"
+            )));
+        }
+        Ok(())
+    }
+
+    fn comprobar_altura_json(&self, v: &serde_json::Value) -> Result<(), electrum_client::Error> {
+        match v.get("height").and_then(|h| h.as_u64()) {
+            // Sin pasar por `usize` (truncaría en 32 bits): `u32::try_from` directo.
+            Some(h) => match u32::try_from(h) {
+                Ok(h) => self.comprobar_altura(h as usize),
+                Err(_) => Err(electrum_client::Error::Message(format!(
+                    "altura {h} fuera de rango"
+                ))),
+            },
+            None => Err(electrum_client::Error::Message(
+                "headers.subscribe sin altura".into(),
+            )),
+        }
+    }
+}
+
+impl<E: ElectrumApi> ElectrumApi for Vigilado<E> {
+    fn raw_call(
+        &self,
+        method_name: &str,
+        params: impl IntoIterator<Item = Param>,
+    ) -> Result<serde_json::Value, electrum_client::Error> {
+        let v = self.interno.raw_call(method_name, params)?;
+        if method_name == METODO_ALTURA {
+            self.comprobar_altura_json(&v)?;
+        }
+        Ok(v)
+    }
+
+    fn batch_call(&self, batch: &Batch) -> Result<Vec<serde_json::Value>, electrum_client::Error> {
+        let respuestas = self.interno.batch_call(batch)?;
+        for ((metodo, _), v) in batch.iter().zip(respuestas.iter()) {
+            if metodo == METODO_ALTURA {
+                self.comprobar_altura_json(v)?;
+            }
+        }
+        Ok(respuestas)
+    }
+
+    fn block_headers_subscribe_raw(&self) -> Result<RawHeaderNotification, electrum_client::Error> {
+        let n = self.interno.block_headers_subscribe_raw()?;
+        self.comprobar_altura(n.height)?;
+        Ok(n)
+    }
+
+    fn block_headers_pop_raw(
+        &self,
+    ) -> Result<Option<RawHeaderNotification>, electrum_client::Error> {
+        let n = self.interno.block_headers_pop_raw()?;
+        if let Some(n) = &n {
+            self.comprobar_altura(n.height)?;
+        }
+        Ok(n)
+    }
+
+    fn block_header_raw(&self, height: usize) -> Result<Vec<u8>, electrum_client::Error> {
+        self.interno.block_header_raw(height)
+    }
+
+    fn block_headers(
+        &self,
+        start_height: usize,
+        count: usize,
+    ) -> Result<GetHeadersRes, electrum_client::Error> {
+        self.interno.block_headers(start_height, count)
+    }
+
+    fn estimate_fee(
+        &self,
+        number: usize,
+        mode: Option<EstimationMode>,
+    ) -> Result<f64, electrum_client::Error> {
+        self.interno.estimate_fee(number, mode)
+    }
+
+    fn relay_fee(&self) -> Result<f64, electrum_client::Error> {
+        self.interno.relay_fee()
+    }
+
+    fn script_subscribe(
+        &self,
+        script: &Script,
+    ) -> Result<Option<ScriptStatus>, electrum_client::Error> {
+        self.interno.script_subscribe(script)
+    }
+
+    fn batch_script_subscribe<'s, I>(
+        &self,
+        scripts: I,
+    ) -> Result<Vec<Option<ScriptStatus>>, electrum_client::Error>
+    where
+        I: IntoIterator + Clone,
+        I::Item: Borrow<&'s Script>,
+    {
+        self.interno.batch_script_subscribe(scripts)
+    }
+
+    fn script_unsubscribe(&self, script: &Script) -> Result<bool, electrum_client::Error> {
+        self.interno.script_unsubscribe(script)
+    }
+
+    fn script_pop(&self, script: &Script) -> Result<Option<ScriptStatus>, electrum_client::Error> {
+        self.interno.script_pop(script)
+    }
+
+    fn script_get_balance(&self, script: &Script) -> Result<GetBalanceRes, electrum_client::Error> {
+        self.interno.script_get_balance(script)
+    }
+
+    fn batch_script_get_balance<'s, I>(
+        &self,
+        scripts: I,
+    ) -> Result<Vec<GetBalanceRes>, electrum_client::Error>
+    where
+        I: IntoIterator + Clone,
+        I::Item: Borrow<&'s Script>,
+    {
+        self.interno.batch_script_get_balance(scripts)
+    }
+
+    fn script_get_history(
+        &self,
+        script: &Script,
+    ) -> Result<Vec<GetHistoryRes>, electrum_client::Error> {
+        self.interno.script_get_history(script)
+    }
+
+    fn batch_script_get_history<'s, I>(
+        &self,
+        scripts: I,
+    ) -> Result<Vec<Vec<GetHistoryRes>>, electrum_client::Error>
+    where
+        I: IntoIterator + Clone,
+        I::Item: Borrow<&'s Script>,
+    {
+        self.interno.batch_script_get_history(scripts)
+    }
+
+    fn script_list_unspent(
+        &self,
+        script: &Script,
+    ) -> Result<Vec<ListUnspentRes>, electrum_client::Error> {
+        self.interno.script_list_unspent(script)
+    }
+
+    fn batch_script_list_unspent<'s, I>(
+        &self,
+        scripts: I,
+    ) -> Result<Vec<Vec<ListUnspentRes>>, electrum_client::Error>
+    where
+        I: IntoIterator + Clone,
+        I::Item: Borrow<&'s Script>,
+    {
+        self.interno.batch_script_list_unspent(scripts)
+    }
+
+    fn transaction_get_raw(&self, txid: &Txid) -> Result<Vec<u8>, electrum_client::Error> {
+        self.interno.transaction_get_raw(txid)
+    }
+
+    fn batch_transaction_get_raw<'t, I>(
+        &self,
+        txids: I,
+    ) -> Result<Vec<Vec<u8>>, electrum_client::Error>
+    where
+        I: IntoIterator + Clone,
+        I::Item: Borrow<&'t Txid>,
+    {
+        self.interno.batch_transaction_get_raw(txids)
+    }
+
+    fn batch_block_header_raw<I>(&self, heights: I) -> Result<Vec<Vec<u8>>, electrum_client::Error>
+    where
+        I: IntoIterator + Clone,
+        I::Item: Borrow<u32>,
+    {
+        self.interno.batch_block_header_raw(heights)
+    }
+
+    fn batch_estimate_fee<I>(&self, numbers: I) -> Result<Vec<f64>, electrum_client::Error>
+    where
+        I: IntoIterator + Clone,
+        I::Item: Borrow<usize>,
+    {
+        self.interno.batch_estimate_fee(numbers)
+    }
+
+    fn transaction_broadcast_raw(&self, raw_tx: &[u8]) -> Result<Txid, electrum_client::Error> {
+        self.interno.transaction_broadcast_raw(raw_tx)
+    }
+
+    fn transaction_broadcast_package_raw<T: AsRef<[u8]>>(
+        &self,
+        raw_txs: &[T],
+    ) -> Result<BroadcastPackageRes, electrum_client::Error> {
+        self.interno.transaction_broadcast_package_raw(raw_txs)
+    }
+
+    fn transaction_get_merkle(
+        &self,
+        txid: &Txid,
+        height: usize,
+    ) -> Result<GetMerkleRes, electrum_client::Error> {
+        self.interno.transaction_get_merkle(txid, height)
+    }
+
+    fn batch_transaction_get_merkle<I>(
+        &self,
+        txids_and_heights: I,
+    ) -> Result<Vec<GetMerkleRes>, electrum_client::Error>
+    where
+        I: IntoIterator + Clone,
+        I::Item: Borrow<(Txid, usize)>,
+    {
+        self.interno.batch_transaction_get_merkle(txids_and_heights)
+    }
+
+    fn txid_from_pos(&self, height: usize, tx_pos: usize) -> Result<Txid, electrum_client::Error> {
+        self.interno.txid_from_pos(height, tx_pos)
+    }
+
+    fn txid_from_pos_with_merkle(
+        &self,
+        height: usize,
+        tx_pos: usize,
+    ) -> Result<TxidFromPosRes, electrum_client::Error> {
+        self.interno.txid_from_pos_with_merkle(height, tx_pos)
+    }
+
+    fn server_features(&self) -> Result<ServerFeaturesRes, electrum_client::Error> {
+        self.interno.server_features()
+    }
+
+    fn mempool_get_info(&self) -> Result<MempoolInfoRes, electrum_client::Error> {
+        self.interno.mempool_get_info()
+    }
+
+    fn ping(&self) -> Result<(), electrum_client::Error> {
+        self.interno.ping()
+    }
+
+    fn calls_made(&self) -> Result<usize, electrum_client::Error> {
+        self.interno.calls_made()
+    }
+}
+
+/// ¿Es «1.4» o una revisión suya («1.4.N»)? Por componentes, no por prefijo: dos o tres
+/// componentes, el primero exactamente «1», el segundo exactamente «4», y el tercero, si lo
+/// hay, no vacío y solo dígitos.
+pub(crate) fn protocolo_admitido(protocolo: &str) -> bool {
+    let partes: Vec<&str> = protocolo.split('.').collect();
+    match partes.as_slice() {
+        ["1", "4"] => true,
+        ["1", "4", rev] => !rev.is_empty() && rev.bytes().all(|b| b.is_ascii_digit()),
+        _ => false,
+    }
+}
+
+/// Lo que una conexión comprobó de su servidor al abrirse (puertas 2 y 4).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Validacion {
+    pub version_servidor: String,
+    pub protocolo: String,
+    pub latencia_ms: u64,
+    pub altura: u32,
+}
+
+/// Una conexión Electrum que ha pasado las cuatro puertas (huella si procede, génesis,
+/// protocolo y altura), vigilada durante toda su vida.
+pub(crate) struct Conexion {
+    cliente: BdkElectrumClient<Vigilado<RawClient<Flujo>>>,
+    /// Huella SPKI fijada con la que se abrió (solo `ssl://` con huella).
+    huella: Option<[u8; 32]>,
 }
 
 impl Conexion {
-    /// Conecta y comprueba la red del servidor. `huella` solo tiene sentido con `ssl://`.
+    /// Conecta y pasa las CUATRO puertas, en este orden: huella (con `ssl://` y huella),
+    /// protocolo 1.4 (`server.version`, primer mensaje), génesis de `red` y altura no inferior
+    /// a `altura_minima` (0 = nada visto todavía).
     pub fn abrir(
         servidor: &str,
         red: Network,
         huella: Option<&str>,
         espera: Duration,
+        altura_minima: u32,
     ) -> Result<Conexion, Error> {
+        Self::abrir_validada(servidor, red, huella, espera, altura_minima).map(|(c, _)| c)
+    }
+
+    /// Como [`Conexion::abrir`], devolviendo además lo que la conexión comprobó.
+    pub(crate) fn abrir_validada(
+        servidor: &str,
+        red: Network,
+        huella: Option<&str>,
+        espera: Duration,
+        altura_minima: u32,
+    ) -> Result<(Conexion, Validacion), Error> {
         let red = network_permitida(red)?;
         let destino = Destino::analizar(servidor)?;
-        let conexion = match (destino.esquema, huella) {
+        // 1. transporte e identidad (la huella se comprueba dentro del apretón TLS).
+        let (flujo, huella_fijada) = match (destino.esquema, huella) {
             (Esquema::Ssl, Some(h)) => {
                 let esperada = analizar_huella(h)?;
-                let cliente = conectar_pinado(&destino, esperada, espera)?;
-                Conexion::Pinada(BdkElectrumClient::new(cliente), esperada)
+                (
+                    Flujo::Tls(conectar_pinado(&destino, esperada, espera)?),
+                    Some(esperada),
+                )
             }
             (Esquema::Tcp, Some(_)) => {
                 return Err(Error::HuellaServidor(
                     "la huella solo se comprueba con ssl://".into(),
                 ))
             }
-            _ => {
-                // retry(0): sin reintentos internos que salten la comprobación de red.
-                let cfg = ConfigBuilder::new().timeout(Some(espera)).retry(0).build();
-                let c = Client::from_config(servidor, cfg).map_err(red_err)?;
-                Conexion::Normal(BdkElectrumClient::new(c))
-            }
+            (Esquema::Ssl, None) => (Flujo::Tls(conectar_tls_publico(&destino, espera)?), None),
+            (Esquema::Tcp, None) => (Flujo::Plano(conectar_tcp(&destino, espera)?), None),
         };
-        conexion.comprobar_genesis(red)?;
-        Ok(conexion)
+        // `RawClient::from` no negocia nada: la única negociación es la del motor, abajo.
+        let conexion = Conexion {
+            cliente: BdkElectrumClient::new(Vigilado::nuevo(RawClient::from(flujo), altura_minima)),
+            huella: huella_fijada,
+        };
+        // 2. `server.version`, PRIMER mensaje Electrum de la sesión.
+        let (version_servidor, protocolo, latencia_ms) = conexion.negociar_version()?;
+        if !protocolo_admitido(&protocolo) {
+            return Err(Error::Red(format!(
+                "protocolo Electrum {protocolo} no admitido (hace falta 1.4)"
+            )));
+        }
+        conexion.comprobar_genesis(red)?; // 3. red correcta
+                                          // 4. altura que no baja: la comprueba el vigilante en esta misma respuesta (y en todas
+                                          // las siguientes de la sesión, contra la marca máxima); aquí solo se recoge el valor.
+        let altura = conexion.altura()?;
+        Ok((
+            conexion,
+            Validacion {
+                version_servidor,
+                protocolo,
+                latencia_ms,
+                altura,
+            },
+        ))
     }
 
     fn comprobar_genesis(&self, red: Network) -> Result<(), Error> {
-        let f = con_api!(self, |c| c.inner.server_features()).map_err(red_err)?;
+        let f = self.cliente.inner.server_features().map_err(red_err)?;
         let visto = BlockHash::from_str(&f.genesis_hash.to_lower_hex_string())
             .map_err(|_| Error::RedServidor("genesis_hash ilegible".into()))?;
         let esperado = genesis_block(red).block_hash();
@@ -239,17 +633,26 @@ impl Conexion {
         Ok(())
     }
 
+    /// Altura que anuncia el servidor, ya comprobada por el vigilante contra la mínima.
     pub fn altura(&self) -> Result<u32, Error> {
-        let h = con_api!(self, |c| c.inner.block_headers_subscribe()).map_err(red_err)?;
+        let h = self
+            .cliente
+            .inner
+            .block_headers_subscribe()
+            .map_err(red_err)?;
         Ok(h.height as u32)
     }
 
     pub fn comision_btc_kvb(&self, bloques: usize) -> Result<f64, Error> {
-        let e = con_api!(self, |c| c.inner.estimate_fee(bloques, None)).map_err(red_err)?;
+        let e = self
+            .cliente
+            .inner
+            .estimate_fee(bloques, None)
+            .map_err(red_err)?;
         if e > 0.0 {
             Ok(e)
         } else {
-            con_api!(self, |c| c.inner.relay_fee()).map_err(red_err)
+            self.cliente.inner.relay_fee().map_err(red_err)
         }
     }
 
@@ -257,7 +660,7 @@ impl Conexion {
         &self,
         tx: &bitcoin::Transaction,
     ) -> Result<bitcoin::Txid, electrum_client::Error> {
-        con_api!(self, |c| c.inner.transaction_broadcast(tx))
+        self.cliente.inner.transaction_broadcast(tx)
     }
 
     pub fn escaneo_completo(
@@ -268,10 +671,10 @@ impl Conexion {
         lote: usize,
     ) -> Result<bdk_wallet::chain::spk_client::FullScanResponse<bdk_wallet::KeychainKind>, Error>
     {
-        con_api!(self, |c| {
-            c.populate_tx_cache(txs);
-            c.full_scan(peticion, gap, lote, true).map_err(red_err)
-        })
+        self.cliente.populate_tx_cache(txs);
+        self.cliente
+            .full_scan(peticion, gap, lote, true)
+            .map_err(red_err)
     }
 
     pub fn sincronizacion(
@@ -280,23 +683,27 @@ impl Conexion {
         peticion: impl Into<bdk_wallet::chain::spk_client::SyncRequest<(bdk_wallet::KeychainKind, u32)>>,
         lote: usize,
     ) -> Result<bdk_wallet::chain::spk_client::SyncResponse, Error> {
-        con_api!(self, |c| {
-            c.populate_tx_cache(txs);
-            c.sync(peticion, lote, true).map_err(red_err)
-        })
+        self.cliente.populate_tx_cache(txs);
+        self.cliente.sync(peticion, lote, true).map_err(red_err)
     }
 
-    /// `server.version`: (versión del servidor, protocolo) y latencia de la llamada.
-    pub fn version(&self) -> Result<(String, String, u64), Error> {
+    /// La ÚNICA negociación `server.version` de la sesión: propone «1.4» a secas (no un rango)
+    /// y devuelve (versión del servidor, protocolo negociado, latencia de la llamada). Lo
+    /// llama `abrir_validada` una vez; un segundo `server.version` sería rechazado por un
+    /// servidor estricto.
+    fn negociar_version(&self) -> Result<(String, String, u64), Error> {
         let t0 = Instant::now();
-        let v = con_api!(self, |c| c.inner.raw_call(
-            "server.version",
-            vec![
-                electrum_client::Param::String("x39-wallet".into()),
-                electrum_client::Param::String("1.4".into())
-            ]
-        ))
-        .map_err(red_err)?;
+        let v = self
+            .cliente
+            .inner
+            .raw_call(
+                "server.version",
+                vec![
+                    Param::String("x39-wallet".into()),
+                    Param::String("1.4".into()),
+                ],
+            )
+            .map_err(red_err)?;
         let ms = t0.elapsed().as_millis() as u64;
         let par = v
             .as_array()
@@ -315,10 +722,7 @@ impl Conexion {
     }
 
     pub fn huella(&self) -> Option<[u8; 32]> {
-        match self {
-            Conexion::Normal(_) => None,
-            Conexion::Pinada(_, h) => Some(*h),
-        }
+        self.huella
     }
 }
 
@@ -333,12 +737,78 @@ fn instalar_proveedor() -> Arc<rustls::crypto::CryptoProvider> {
         .unwrap_or_else(|| Arc::new(rustls::crypto::aws_lc_rs::default_provider()))
 }
 
+/// TCP con tiempo límite de conexión, lectura y escritura.
+fn conectar_tcp(destino: &Destino, espera: Duration) -> Result<TcpStream, Error> {
+    use std::net::ToSocketAddrs;
+    let direccion = format!("{}:{}", destino.host, destino.puerto);
+    let mut ultimo = None;
+    let mut flujo = None;
+    for addr in direccion
+        .to_socket_addrs()
+        .map_err(|e| Error::Red(format!("resolviendo {direccion}: {e}")))?
+    {
+        match TcpStream::connect_timeout(&addr, espera) {
+            Ok(s) => {
+                flujo = Some(s);
+                break;
+            }
+            Err(e) => ultimo = Some(e),
+        }
+    }
+    let tcp = flujo.ok_or_else(|| {
+        Error::Red(format!(
+            "no se pudo conectar con {direccion}: {}",
+            ultimo.map(|e| e.to_string()).unwrap_or_default()
+        ))
+    })?;
+    tcp.set_read_timeout(Some(espera)).map_err(red_io)?;
+    tcp.set_write_timeout(Some(espera)).map_err(red_io)?;
+    Ok(tcp)
+}
+
+/// Raíces públicas (Mozilla, vía `webpki-roots`, la misma versión que trae electrum-client).
+fn raices_publicas() -> RootCertStore {
+    webpki_roots::TLS_SERVER_ROOTS
+        .iter()
+        .map(|t| TrustAnchor {
+            subject: Der::from_slice(t.subject),
+            subject_public_key_info: Der::from_slice(t.spki),
+            name_constraints: t.name_constraints.map(Der::from_slice),
+        })
+        .collect()
+}
+
+/// `ssl://` SIN huella: certificado validado contra las raíces públicas (CA, nombre y
+/// caducidad), como cualquier cliente TLS. Solo para el servidor público de signet.
+fn conectar_tls_publico(destino: &Destino, espera: Duration) -> Result<FlujoTls, Error> {
+    let proveedor = instalar_proveedor();
+    let config = ClientConfig::builder_with_provider(proveedor)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| Error::Red(format!("tls: {e}")))?
+        .with_root_certificates(raices_publicas())
+        .with_no_client_auth();
+    let nombre = ServerName::try_from(destino.host.clone())
+        .map_err(|_| Error::Red(format!("nombre de servidor inválido: {}", destino.host)))?;
+    let sesion = ClientConnection::new(Arc::new(config), nombre)
+        .map_err(|e| Error::Red(format!("tls: {e}")))?;
+    let mut flujo = StreamOwned::new(sesion, conectar_tcp(destino, espera)?);
+    // Forzar el apretón de manos ahora: un certificado no reconocido falla aquí, antes de
+    // que viaje ningún dato de aplicación.
+    while flujo.conn.is_handshaking() {
+        flujo
+            .conn
+            .complete_io(&mut flujo.sock)
+            .map_err(|e| Error::Red(format!("tls: {e}")))?;
+    }
+    Ok(flujo)
+}
+
 /// TLS propio con la huella fijada: el apretón de manos falla si el SPKI no es el esperado.
 fn conectar_pinado(
     destino: &Destino,
     esperada: [u8; 32],
     espera: Duration,
-) -> Result<RawClient<FlujoTls>, Error> {
+) -> Result<FlujoTls, Error> {
     let proveedor = instalar_proveedor();
     let verificador = Arc::new(VerificadorHuella {
         esperada,
@@ -355,33 +825,7 @@ fn conectar_pinado(
         .map_err(|_| Error::Red(format!("nombre de servidor inválido: {}", destino.host)))?;
     let sesion = ClientConnection::new(Arc::new(config), nombre)
         .map_err(|e| Error::Red(format!("tls: {e}")))?;
-    let direccion = format!("{}:{}", destino.host, destino.puerto);
-    let tcp = {
-        use std::net::ToSocketAddrs;
-        let mut ultimo = None;
-        let mut flujo = None;
-        for addr in direccion
-            .to_socket_addrs()
-            .map_err(|e| Error::Red(format!("resolviendo {direccion}: {e}")))?
-        {
-            match TcpStream::connect_timeout(&addr, espera) {
-                Ok(s) => {
-                    flujo = Some(s);
-                    break;
-                }
-                Err(e) => ultimo = Some(e),
-            }
-        }
-        flujo.ok_or_else(|| {
-            Error::Red(format!(
-                "no se pudo conectar con {direccion}: {}",
-                ultimo.map(|e| e.to_string()).unwrap_or_default()
-            ))
-        })?
-    };
-    tcp.set_read_timeout(Some(espera)).map_err(red_io)?;
-    tcp.set_write_timeout(Some(espera)).map_err(red_io)?;
-    let mut flujo = StreamOwned::new(sesion, tcp);
+    let mut flujo = StreamOwned::new(sesion, conectar_tcp(destino, espera)?);
     // Forzar el apretón de manos ahora, para que una huella distinta falle aquí.
     while flujo.conn.is_handshaking() {
         if let Err(e) = flujo.conn.complete_io(&mut flujo.sock) {
@@ -398,8 +842,7 @@ fn conectar_pinado(
             });
         }
     }
-    let cliente: RawClient<FlujoTls> = RawClient::from(flujo);
-    Ok(cliente)
+    Ok(flujo)
 }
 
 #[cfg(test)]
@@ -411,8 +854,9 @@ fn red_io(e: std::io::Error) -> Error {
     Error::Red(e.to_string())
 }
 
-/// Comprobación completa del nodo, en el orden de la cabecera. `altura_minima`: la última
-/// altura que el móvil ya vio (0 si ninguna). No sincroniza nada.
+/// Sonda del nodo: abre una conexión como cualquier otra operación (las cuatro puertas, en el
+/// orden de la cabecera) e informa de lo que vio. `altura_minima`: la última altura que el
+/// móvil ya vio (0 si ninguna). No sincroniza nada.
 pub fn comprobar_nodo(
     red: Red,
     servidor: &str,
@@ -421,25 +865,14 @@ pub fn comprobar_nodo(
 ) -> Result<NodoInfo, Error> {
     let red = red.permitida()?;
     let destino = Destino::analizar(servidor)?;
-    let c = Conexion::abrir(servidor, red.network(), huella, ESPERA_RED)?; // 1. huella/TLS; 2. génesis
-    let (version_servidor, protocolo, latencia_ms) = c.version()?; // 3. protocolo y latencia
-    if !protocolo.starts_with("1.4") {
-        return Err(Error::Red(format!(
-            "protocolo Electrum {protocolo} no admitido (hace falta 1.4)"
-        )));
-    }
-    let altura = c.altura()?; // 4. altura
-    if altura < altura_minima {
-        return Err(Error::Red(format!(
-            "el servidor va por detrás: altura {altura}, ya se había visto {altura_minima}"
-        )));
-    }
+    let (c, v) =
+        Conexion::abrir_validada(servidor, red.network(), huella, ESPERA_RED, altura_minima)?;
     Ok(NodoInfo {
         servidor: servidor.to_string(),
-        version_servidor,
-        protocolo,
-        altura,
-        latencia_ms,
+        version_servidor: v.version_servidor,
+        protocolo: v.protocolo,
+        altura: v.altura,
+        latencia_ms: v.latencia_ms,
         cifrado: destino.esquema == Esquema::Ssl,
         huella_vista: c
             .huella()

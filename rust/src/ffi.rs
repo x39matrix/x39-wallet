@@ -63,9 +63,15 @@ fn huella_opt(h: &Option<String>) -> Option<&str> {
 
 /// Altura del servidor Electrum, verificando que es de la red indicada. `huella_spki`: la
 /// misma huella que en el resto de operaciones (obligatoria con nodo autofirmado).
+/// `altura_vista`: la última altura que la app ya vio (0 si ninguna); por debajo se rechaza.
 #[uniffi::export]
-pub fn altura_red(red: Red, servidor: String, huella_spki: Option<String>) -> Result<u32, Error> {
-    motor::altura_red(red, &servidor, huella_opt(&huella_spki))
+pub fn altura_red(
+    red: Red,
+    servidor: String,
+    huella_spki: Option<String>,
+    altura_vista: u32,
+) -> Result<u32, Error> {
+    motor::altura_red(red, &servidor, huella_opt(&huella_spki), altura_vista)
 }
 
 /// Comisión recomendada en sat/vB para confirmar en `bloques` bloques.
@@ -75,13 +81,21 @@ pub fn estimar_comision(
     servidor: String,
     bloques: u32,
     huella_spki: Option<String>,
+    altura_vista: u32,
 ) -> Result<f64, Error> {
-    motor::estimar_comision(red, &servidor, bloques as usize, huella_opt(&huella_spki))
+    motor::estimar_comision(
+        red,
+        &servidor,
+        bloques as usize,
+        huella_opt(&huella_spki),
+        altura_vista,
+    )
 }
 
-/// Comprobación completa del nodo del usuario (NodeBridge), en este orden: red por génesis,
-/// identidad por huella SPKI (con `ssl://` y huella), altura no inferior a `altura_minima`,
-/// protocolo 1.4 y latencia. No sincroniza ni difunde nada.
+/// Comprobación completa del nodo del usuario (NodeBridge), con las mismas cuatro puertas y en
+/// el mismo orden que cualquier otra conexión del motor: identidad por huella SPKI (con
+/// `ssl://` y huella), protocolo 1.4 y latencia (`server.version`, primer mensaje), red por
+/// génesis y altura no inferior a `altura_minima`. No sincroniza ni difunde nada.
 #[uniffi::export]
 pub fn comprobar_nodo(
     red: Red,

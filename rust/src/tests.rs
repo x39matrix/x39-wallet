@@ -3,7 +3,7 @@
 //! (`cargo test -- --ignored`). Por defecto mainnet está prohibida y se prueba que lo
 //! está; con `--features mainnet` se prueba lo contrario.
 
-use super::mock_electrum::{Difusion, Simulado};
+use super::mock_electrum::{Difusion, Maldad, Simulado};
 use super::*;
 use bdk_wallet::chain::{BlockId, ConfirmationBlockTime, TxUpdate};
 use bdk_wallet::Update;
@@ -431,11 +431,11 @@ mod sin_mainnet {
         );
         // Se rechaza ANTES de intentar conectar con nadie.
         assert_eq!(
-            altura_red(Red::Mainnet, "tcp://sin-servidor:1", None).unwrap_err(),
+            altura_red(Red::Mainnet, "tcp://sin-servidor:1", None, 0).unwrap_err(),
             Error::RedProhibida
         );
         assert_eq!(
-            estimar_comision(Red::Mainnet, "tcp://sin-servidor:1", 2, None).unwrap_err(),
+            estimar_comision(Red::Mainnet, "tcp://sin-servidor:1", 2, None, 0).unwrap_err(),
             Error::RedProhibida
         );
         // Abrir un estado (de signet) como mainnet: prohibido también.
@@ -459,9 +459,9 @@ fn regtest_sincroniza_con_el_simulado() {
     assert_eq!(b.altura(), 1);
     assert_eq!(b.saldo().confirmado, FONDOS);
     assert_eq!(b.movimientos().len(), 1);
-    assert_eq!(altura_red(Red::Regtest, &sim.url, None).unwrap(), 1);
+    assert_eq!(altura_red(Red::Regtest, &sim.url, None, 0).unwrap(), 1);
     assert_eq!(
-        estimar_comision(Red::Regtest, &sim.url, 2, None).unwrap(),
+        estimar_comision(Red::Regtest, &sim.url, 2, None, 0).unwrap(),
         2.0
     );
 }
@@ -528,15 +528,15 @@ fn servidor_de_otra_red_rechazado() {
         Error::RedServidor(_)
     ));
     assert!(matches!(
-        altura_red(Red::Regtest, &sim.url, None).unwrap_err(),
+        altura_red(Red::Regtest, &sim.url, None, 0).unwrap_err(),
         Error::RedServidor(_)
     ));
     assert!(matches!(
-        estimar_comision(Red::Regtest, &sim.url, 2, None).unwrap_err(),
+        estimar_comision(Red::Regtest, &sim.url, 2, None, 0).unwrap_err(),
         Error::RedServidor(_)
     ));
     // Pedido como signet, el mismo servidor vale.
-    assert_eq!(altura_red(Red::Signet, &sim.url, None).unwrap(), 1);
+    assert_eq!(altura_red(Red::Signet, &sim.url, None, 0).unwrap(), 1);
     // Y una tx firmada no se intenta difundir a un servidor de otra red: estado intacto.
     let e = firmar_40k(&mut b);
     assert!(matches!(
@@ -1407,9 +1407,9 @@ fn signet_restaurar_encuentra_direcciones() {
 #[test]
 #[ignore]
 fn signet_altura_y_comision() {
-    let h = altura_red(Red::Signet, SIGNET, None).unwrap();
+    let h = altura_red(Red::Signet, SIGNET, None, 0).unwrap();
     assert!(h > 300_000, "altura {h}");
-    let c = estimar_comision(Red::Signet, SIGNET, 2, None).unwrap();
+    let c = estimar_comision(Red::Signet, SIGNET, 2, None, 0).unwrap();
     assert!((1.0..10_000.0).contains(&c), "comisión {c} sat/vB");
 }
 
@@ -1433,9 +1433,9 @@ fn sin_fallos_de_red<T>(mut f: impl FnMut() -> Result<T, Error>) -> Result<T, Er
 #[ignore]
 fn signet_servidor_publico_rechazado_si_se_pide_otra_red() {
     // El genesis_hash del servidor de signet no es el de testnet ni el de regtest.
-    let e = sin_fallos_de_red(|| altura_red(Red::Testnet, SIGNET, None)).unwrap_err();
+    let e = sin_fallos_de_red(|| altura_red(Red::Testnet, SIGNET, None, 0)).unwrap_err();
     assert!(matches!(e, Error::RedServidor(_)), "{e}");
-    let e = sin_fallos_de_red(|| altura_red(Red::Regtest, SIGNET, None)).unwrap_err();
+    let e = sin_fallos_de_red(|| altura_red(Red::Regtest, SIGNET, None, 0)).unwrap_err();
     assert!(matches!(e, Error::RedServidor(_)), "{e}");
     let dir = tempfile::tempdir().unwrap();
     let mut b = Billetera::crear(mn(), Red::Testnet, &dir.path().join("t.dat")).unwrap();
@@ -1597,23 +1597,26 @@ fn nodo_la_huella_viaja_en_altura_y_comision() {
     let buena = sim.huella();
     let mala = "11".repeat(32);
     // Con la huella buena, las dos funciones libres funcionan por TLS con huella.
-    assert_eq!(altura_red(Red::Regtest, &sim.url, Some(&buena)).unwrap(), 0);
     assert_eq!(
-        estimar_comision(Red::Regtest, &sim.url, 2, Some(&buena)).unwrap(),
+        altura_red(Red::Regtest, &sim.url, Some(&buena), 0).unwrap(),
+        0
+    );
+    assert_eq!(
+        estimar_comision(Red::Regtest, &sim.url, 2, Some(&buena), 0).unwrap(),
         2.0
     );
     // Con huella mala, se niegan (no caen a «aceptar cualquier certificado»).
     assert!(matches!(
-        altura_red(Red::Regtest, &sim.url, Some(&mala)).unwrap_err(),
+        altura_red(Red::Regtest, &sim.url, Some(&mala), 0).unwrap_err(),
         Error::HuellaServidor(_)
     ));
     assert!(matches!(
-        estimar_comision(Red::Regtest, &sim.url, 2, Some(&mala)).unwrap_err(),
+        estimar_comision(Red::Regtest, &sim.url, 2, Some(&mala), 0).unwrap_err(),
         Error::HuellaServidor(_)
     ));
     // Sin huella, un certificado autofirmado no pasa la validación por raíces públicas.
     assert!(matches!(
-        altura_red(Red::Regtest, &sim.url, None).unwrap_err(),
+        altura_red(Red::Regtest, &sim.url, None, 0).unwrap_err(),
         Error::Red(_)
     ));
 }
@@ -1624,7 +1627,7 @@ fn nodo_corte_tras_validar_genesis_y_otra_red_al_volver() {
     let sim = Simulado::arrancar(Network::Regtest);
     let puerto = sim.puerto();
     let url = sim.url.clone();
-    let c = Conexion::abrir(&url, Network::Regtest, None, Duration::from_secs(2)).unwrap();
+    let c = Conexion::abrir(&url, Network::Regtest, None, Duration::from_secs(2), 0).unwrap();
     assert_eq!(c.altura().unwrap(), 0);
     // Corte del servidor; en la misma dirección aparece un servidor de OTRA red.
     sim.parar();
@@ -1636,7 +1639,7 @@ fn nodo_corte_tras_validar_genesis_y_otra_red_al_volver() {
     );
     // Un reintento de la capa de arriba repite toda la validación y descubre la red equivocada.
     assert!(matches!(
-        Conexion::abrir(&url, Network::Regtest, None, Duration::from_secs(2)),
+        Conexion::abrir(&url, Network::Regtest, None, Duration::from_secs(2), 0),
         Err(Error::RedServidor(_))
     ));
     assert!(matches!(
@@ -1644,7 +1647,7 @@ fn nodo_corte_tras_validar_genesis_y_otra_red_al_volver() {
         Error::RedServidor(_)
     ));
     // Pedido como signet, el nuevo sí vale.
-    assert_eq!(altura_red(Red::Signet, &otro.url, None).unwrap(), 0);
+    assert_eq!(altura_red(Red::Signet, &otro.url, None, 0).unwrap(), 0);
 }
 
 #[test]
@@ -1653,11 +1656,1411 @@ fn signet_publico_con_huella_equivocada_se_rechaza_tambien_en_comision() {
     // Certificado público válido pero huella fijada distinta: la huella manda, no la CA.
     let mala = "22".repeat(32);
     assert!(matches!(
-        estimar_comision(Red::Signet, SIGNET, 2, Some(&mala)).unwrap_err(),
+        estimar_comision(Red::Signet, SIGNET, 2, Some(&mala), 0).unwrap_err(),
         Error::HuellaServidor(_)
     ));
     assert!(matches!(
-        altura_red(Red::Signet, SIGNET, Some(&mala)).unwrap_err(),
+        altura_red(Red::Signet, SIGNET, Some(&mala), 0).unwrap_err(),
         Error::HuellaServidor(_)
     ));
+}
+
+// ===== B4 (PRUEBAS.md §7): batería NEGATIVA de la puerta del nodo ==========================
+//
+// Puertas, en el orden real de `Conexion::abrir` (el mismo para la sonda `comprobar_nodo` y
+// para cada operación): huella SPKI → protocolo 1.4 (`server.version`, primer mensaje) →
+// génesis → altura que no baja. Las de huella y red ya tienen pruebas más arriba; aquí
+// están las que faltaban: protocolo distinto, altura que retrocede respecto a la última vista,
+// conservación del estado en cada rechazo (antes de transmitir / con la difusión ya empezada)
+// y, operación por operación, que la conexión de la PROPIA operación rechaza al servidor malo
+// aunque la sonda `comprobar_nodo` lo haya dado por sano un instante antes.
+
+/// Instantánea byte a byte de los ficheros de la billetera (estado BDK y registro de envíos).
+fn instantanea(dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .filter(|e| e.path().is_file())
+        .map(|e| {
+            (
+                e.file_name().to_string_lossy().into_owned(),
+                std::fs::read(e.path()).unwrap(),
+            )
+        })
+        .collect()
+}
+
+/// Nombres de los ficheros que difieren entre dos instantáneas (vacío = idénticas byte a byte).
+fn ficheros_distintos(
+    antes: &std::collections::BTreeMap<String, Vec<u8>>,
+    despues: &std::collections::BTreeMap<String, Vec<u8>>,
+) -> Vec<String> {
+    let mut nombres: Vec<&String> = antes.keys().chain(despues.keys()).collect();
+    nombres.sort();
+    nombres.dedup();
+    nombres
+        .into_iter()
+        .filter(|n| antes.get(*n) != despues.get(*n))
+        .cloned()
+        .collect()
+}
+
+fn txid_cero() -> Txid {
+    <Txid as bitcoin::hashes::Hash>::all_zeros()
+}
+
+/// Billetera regtest emparejada con el simulado TLS (huella fijada) y sincronizada con una
+/// cadena de tres bloques: la «última altura vista» por la billetera queda en 3.
+fn billetera_emparejada(dir: &Path, sim: &Simulado) -> Billetera {
+    let mut b = billetera_regtest(dir, sim); // el depósito va en el bloque 1
+    b.fijar_huella_servidor(huella_de(sim));
+    sim.anadir_bloque(txid_cero()); // 2
+    sim.anadir_bloque(txid_cero()); // 3
+    b.sincronizar(&sim.url).unwrap();
+    assert_eq!(b.altura(), 3, "la billetera ha visto la altura 3");
+    assert_eq!(b.saldo().confirmado, FONDOS);
+    b
+}
+
+/// Huella del simulado si es TLS; `None` con `tcp://`.
+fn huella_de(sim: &Simulado) -> Option<String> {
+    sim.cert_der.as_ref().map(|_| sim.huella())
+}
+
+/// Lo que la billetera tiene EN MEMORIA y que un rechazo no debe alterar.
+#[derive(Debug, Clone, PartialEq)]
+struct Memoria {
+    altura: u32,
+    saldo: Saldo,
+    movimientos: usize,
+    indices: (Option<u32>, Option<u32>),
+    en_curso: Option<(String, EstadoEnvio, u32)>,
+}
+
+fn memoria(b: &Billetera) -> Memoria {
+    Memoria {
+        altura: b.altura(),
+        saldo: b.saldo(),
+        movimientos: b.movimientos().len(),
+        indices: b.indices(),
+        en_curso: b
+            .envio_en_curso()
+            .map(|e| (e.txid, e.estado, e.intentos_difusion)),
+    }
+}
+
+fn es_rechazo_huella(e: &Error) -> bool {
+    matches!(e, Error::HuellaServidor(_))
+}
+fn es_rechazo_red(e: &Error) -> bool {
+    matches!(e, Error::RedServidor(_))
+}
+/// El rechazo de la puerta del protocolo, con el texto que ya usa `comprobar_nodo`.
+fn es_rechazo_protocolo(e: &Error) -> bool {
+    matches!(e, Error::Red(m) if m.contains("protocolo"))
+}
+/// El rechazo de la puerta de la altura, con el texto que ya usa `comprobar_nodo`.
+fn es_rechazo_altura(e: &Error) -> bool {
+    matches!(e, Error::Red(m) if m.contains("por detrás"))
+}
+
+/// Exige que `r` sea el rechazo de la puerta `es_la_puerta`; cualquier otra cosa (éxito, u
+/// otro error) es un fallo con el motivo a la vista.
+fn exigir_rechazo<T: std::fmt::Debug>(
+    op: &str,
+    r: Result<T, Error>,
+    es_la_puerta: fn(&Error) -> bool,
+) {
+    match r {
+        Err(e) if es_la_puerta(&e) => {}
+        Err(e) => panic!("{op}: rechazado, pero NO por la puerta esperada: {e}"),
+        Ok(v) => panic!("{op}: la conexión de la operación ACEPTÓ al servidor malo: {v:?}"),
+    }
+}
+
+// ----- 1 y 2: las puertas que faltaban, en la sonda ---------------------------------------
+
+#[test]
+fn puerta_sonda_rechaza_protocolo_distinto_de_1_4() {
+    let sim = Simulado::arrancar_tls(Network::Regtest);
+    let huella = sim.huella();
+    assert_eq!(
+        comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), 0)
+            .unwrap()
+            .protocolo,
+        "1.4"
+    );
+    // Mismo servidor, misma huella, mismo génesis: solo cambia el protocolo que anuncia.
+    for proto in ["1.0", "1.2", "1.3", "1.5", "2.0", "14", ""] {
+        sim.fijar_protocolo(proto);
+        let err = comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), 0).unwrap_err();
+        assert!(es_rechazo_protocolo(&err), "protocolo {proto:?}: {err}");
+    }
+    // También por tcp:// sin huella: la puerta no depende del transporte.
+    let plano = Simulado::arrancar(Network::Regtest);
+    plano.fijar_protocolo("1.2");
+    let err = comprobar_nodo(Red::Regtest, &plano.url, None, 0).unwrap_err();
+    assert!(es_rechazo_protocolo(&err), "{err}");
+    // Las revisiones de 1.4 (1.4.1, 1.4.2) sí valen.
+    sim.fijar_protocolo("1.4.2");
+    assert_eq!(
+        comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), 0)
+            .unwrap()
+            .protocolo,
+        "1.4.2"
+    );
+}
+
+#[test]
+fn puerta_sonda_rechaza_altura_que_retrocede_respecto_a_la_vista() {
+    let dir = tempfile::tempdir().unwrap();
+    let sim = Simulado::arrancar_tls(Network::Regtest);
+    let huella = sim.huella();
+    let b = billetera_emparejada(dir.path(), &sim);
+    let vista = b.altura();
+    assert_eq!(vista, 3);
+    // Igual que la vista: sano. Un bloque más: sano.
+    assert_eq!(
+        comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), vista)
+            .unwrap()
+            .altura,
+        3
+    );
+    sim.anadir_bloque(txid_cero());
+    assert_eq!(
+        comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), vista)
+            .unwrap()
+            .altura,
+        4
+    );
+    // El mismo servidor (misma huella, mismo génesis) retrocede por debajo de lo visto, en
+    // cualquier medida: rechazado.
+    for atras in [2u32, 1, 0] {
+        sim.retroceder_a(atras);
+        let err = comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), vista).unwrap_err();
+        assert!(es_rechazo_altura(&err), "retrocede a {atras}: {err}");
+    }
+    // Un servidor recién instalado (cadena desde cero) tampoco vale si ya se vio más.
+    let nuevo = Simulado::arrancar(Network::Regtest);
+    let err = comprobar_nodo(Red::Regtest, &nuevo.url, None, vista).unwrap_err();
+    assert!(es_rechazo_altura(&err), "{err}");
+    // Sin nada visto (0), ese mismo servidor es aceptable.
+    assert_eq!(
+        comprobar_nodo(Red::Regtest, &nuevo.url, None, 0)
+            .unwrap()
+            .altura,
+        0
+    );
+}
+
+// ----- 3a: rechazo ANTES de transmitir → fondos y fichero de envíos intactos byte a byte -----
+
+const TODAS: [&str; 3] = ["sincronizar", "escanear", "difundir"];
+
+/// Con un envío firmado a la espera, cada operación de `ops` contra el servidor malo debe
+/// fallar con el rechazo de ESA puerta y no tocar nada, ni en disco ni en memoria: ficheros
+/// idénticos byte a byte, misma altura, saldo, movimientos e índices, el envío sigue Firmada
+/// con 0 intentos y cancelable, y el simulado no recibió ninguna transacción. Se recogen TODAS
+/// las violaciones antes de fallar, para verlas juntas.
+fn exigir_rechazo_previo_sin_tocar_nada(
+    puerta: &str,
+    dir: &Path,
+    b: &mut Billetera,
+    url: &str,
+    sim: &Simulado,
+    txid: Option<&str>,
+    es_la_puerta: fn(&Error) -> bool,
+    ops: &[&str],
+) {
+    let antes = instantanea(dir);
+    let saldo = b.saldo();
+    let mem = memoria(b);
+    if let Some(txid) = txid {
+        let e = b.estado_envio(txid).unwrap();
+        assert_eq!((e.estado, e.intentos_difusion), (EstadoEnvio::Firmada, 0));
+        assert!(e.puede_cancelar);
+    }
+    assert_eq!(sim.recibidas(), 0);
+
+    let mut fallos: Vec<String> = Vec::new();
+    // Cada operación se compara con el estado ORIGINAL inmediatamente después de ejecutarse:
+    // una operación posterior no puede tapar lo que alteró la anterior.
+    for &op in ops {
+        let r: Result<String, Error> = match op {
+            "sincronizar" => b.sincronizar(url).map(|_| String::new()),
+            "escanear" => b.escanear(url).map(|_| String::new()),
+            _ => b
+                .difundir(url, txid.expect("difundir exige un envío firmado"))
+                .map(|i| format!("estado {:?}, intentos {}", i.estado, i.intentos_difusion)),
+        };
+        match r {
+            Err(e) if es_la_puerta(&e) => {}
+            Err(e) => fallos.push(format!("{op}: rechazado, pero no por la puerta: {e}")),
+            Ok(v) => fallos.push(format!("{op}: ACEPTÓ al servidor malo ({v})")),
+        }
+        let distintos = ficheros_distintos(&antes, &instantanea(dir));
+        if !distintos.is_empty() {
+            fallos.push(format!("tras {op}: ficheros modificados: {distintos:?}"));
+        }
+        if b.saldo() != saldo {
+            fallos.push(format!(
+                "tras {op}: saldo cambió: {saldo:?} → {:?}",
+                b.saldo()
+            ));
+        }
+        if memoria(b) != mem {
+            fallos.push(format!(
+                "tras {op}: estado en memoria alterado: {mem:?} → {:?}",
+                memoria(b)
+            ));
+        }
+        if let Some(txid) = txid {
+            let e = b.estado_envio(txid).unwrap();
+            if (e.estado, e.intentos_difusion, e.puede_cancelar) != (EstadoEnvio::Firmada, 0, true)
+            {
+                fallos.push(format!(
+                    "tras {op}: envío: estado {:?}, intentos {}, puede_cancelar {}",
+                    e.estado, e.intentos_difusion, e.puede_cancelar
+                ));
+            }
+        }
+        if sim.recibidas() != 0 {
+            fallos.push(format!(
+                "tras {op}: el simulado RECIBIÓ la transacción ({} veces)",
+                sim.recibidas()
+            ));
+        }
+    }
+    assert!(
+        fallos.is_empty(),
+        "puerta «{puerta}»: el rechazo no conservó el estado:\n  {}",
+        fallos.join("\n  ")
+    );
+}
+
+#[test]
+fn puerta_rechazo_previo_por_huella_no_toca_fondos_ni_envios() {
+    let dir = tempfile::tempdir().unwrap();
+    let sim = Simulado::arrancar_tls(Network::Regtest);
+    let mut b = billetera_emparejada(dir.path(), &sim);
+    let txid = firmar_40k(&mut b).txid;
+    // El servidor presenta otro certificado del que la billetera tiene fijado.
+    b.fijar_huella_servidor(Some("00".repeat(32)));
+    exigir_rechazo_previo_sin_tocar_nada(
+        "huella",
+        dir.path(),
+        &mut b,
+        &sim.url,
+        &sim,
+        Some(&txid),
+        es_rechazo_huella,
+        &TODAS,
+    );
+}
+
+#[test]
+fn puerta_rechazo_previo_por_otra_red_no_toca_fondos_ni_envios() {
+    let dir = tempfile::tempdir().unwrap();
+    // Huella correcta, pero el servidor es de signet y la billetera de regtest.
+    let sim = Simulado::arrancar_tls(Network::Signet);
+    let mut b = billetera_regtest(dir.path(), &sim);
+    b.fijar_huella_servidor(Some(sim.huella()));
+    let txid = firmar_40k(&mut b).txid;
+    exigir_rechazo_previo_sin_tocar_nada(
+        "génesis",
+        dir.path(),
+        &mut b,
+        &sim.url,
+        &sim,
+        Some(&txid),
+        es_rechazo_red,
+        &TODAS,
+    );
+}
+
+#[test]
+fn puerta_rechazo_previo_por_protocolo_no_toca_fondos_ni_envios() {
+    let dir = tempfile::tempdir().unwrap();
+    let sim = Simulado::arrancar_tls(Network::Regtest);
+    let mut b = billetera_emparejada(dir.path(), &sim);
+    let txid = firmar_40k(&mut b).txid;
+    assert!(comprobar_nodo(Red::Regtest, &sim.url, Some(&sim.huella()), b.altura()).is_ok());
+    // Mismo servidor, misma huella y génesis: ahora anuncia otro protocolo.
+    sim.fijar_protocolo("1.5");
+    exigir_rechazo_previo_sin_tocar_nada(
+        "protocolo",
+        dir.path(),
+        &mut b,
+        &sim.url,
+        &sim,
+        Some(&txid),
+        es_rechazo_protocolo,
+        &TODAS,
+    );
+}
+
+#[test]
+fn puerta_rechazo_previo_por_altura_no_toca_fondos_ni_envios() {
+    let dir = tempfile::tempdir().unwrap();
+    let sim = Simulado::arrancar_tls(Network::Regtest);
+    let mut b = billetera_emparejada(dir.path(), &sim); // vista: 3
+    let txid = firmar_40k(&mut b).txid;
+    assert!(comprobar_nodo(Red::Regtest, &sim.url, Some(&sim.huella()), b.altura()).is_ok());
+    // Mismo servidor: su cadena retrocede por debajo de lo que la billetera ya vio.
+    sim.retroceder_a(1);
+    exigir_rechazo_previo_sin_tocar_nada(
+        "altura",
+        dir.path(),
+        &mut b,
+        &sim.url,
+        &sim,
+        Some(&txid),
+        es_rechazo_altura,
+        &TODAS,
+    );
+}
+
+// ----- 3b: la difusión YA empezó → Incierta y monedas reservadas, también si el reintento -----
+// ----- choca con una puerta -------------------------------------------------------------
+
+/// Difunde contra un servidor que se queda mudo → Incierta (1 intento, monedas reservadas).
+/// Devuelve la info del envío y la instantánea de disco en ese estado.
+fn dejar_incierta(
+    dir: &Path,
+    b: &mut Billetera,
+    sim: &Simulado,
+) -> (EnvioInfo, std::collections::BTreeMap<String, Vec<u8>>) {
+    let e = firmar_40k(b);
+    sim.fijar_difusion(Difusion::Colgar(Duration::from_secs(3)));
+    let e = b.difundir(&sim.url, &e.txid).unwrap();
+    assert_eq!((e.estado, e.intentos_difusion), (EstadoEnvio::Incierta, 1));
+    assert!(!e.puede_cancelar && e.puede_reemplazar && e.puede_reintentar);
+    assert_eq!(
+        b.saldo().total,
+        e.cambio_sat,
+        "las monedas del envío están reservadas"
+    );
+    assert_eq!(b.saldo().confirmado, 0);
+    assert_eq!(
+        sim.recibidas(),
+        1,
+        "el servidor RECIBIÓ la transacción una vez antes de callarse"
+    );
+    assert!(sim.difundidas().is_empty(), "colgada: no la aceptó");
+    (e, instantanea(dir))
+}
+
+/// Tras un reintento rechazado en la puerta `es_la_puerta`, el envío sigue EXACTAMENTE como
+/// estaba: Incierta con 1 intento, monedas reservadas (nunca liberadas), no cancelable, y los
+/// ficheros idénticos byte a byte a los de antes del reintento. `recibidas_total`: suma de
+/// recepciones de broadcast en todos los servidores implicados; debe seguir siendo la del
+/// primer intento (1), es decir, el reintento rechazado no llegó a transmitir.
+fn exigir_incierta_intacta(
+    puerta: &str,
+    dir: &Path,
+    b: &mut Billetera,
+    antes: &std::collections::BTreeMap<String, Vec<u8>>,
+    e: &EnvioInfo,
+    reintento: Result<EnvioInfo, Error>,
+    es_la_puerta: fn(&Error) -> bool,
+    recibidas_total: u64,
+) {
+    let mut fallos: Vec<String> = Vec::new();
+    match reintento {
+        Err(err) if es_la_puerta(&err) => {}
+        Err(err) => fallos.push(format!("reintento rechazado, pero no por la puerta: {err}")),
+        Ok(i) => fallos.push(format!(
+            "el reintento ACEPTÓ al servidor malo: estado {:?}, intentos {}",
+            i.estado, i.intentos_difusion
+        )),
+    }
+    let ahora = b.estado_envio(&e.txid).unwrap();
+    if (ahora.estado, ahora.intentos_difusion) != (EstadoEnvio::Incierta, 1) {
+        fallos.push(format!(
+            "envío: estado {:?}, intentos {} (se esperaba Incierta, 1)",
+            ahora.estado, ahora.intentos_difusion
+        ));
+    }
+    if ahora.puede_cancelar || !ahora.puede_reemplazar {
+        fallos.push("el envío se volvió cancelable o dejó de ser reemplazable".into());
+    }
+    if b.saldo().total != e.cambio_sat || b.saldo().confirmado != 0 {
+        fallos.push(format!(
+            "monedas liberadas o movidas: saldo {:?}, cambio {}",
+            b.saldo(),
+            e.cambio_sat
+        ));
+    }
+    if b.envio_en_curso().is_none() {
+        fallos.push("ya no hay envío en curso".into());
+    }
+    if !matches!(b.cancelar(&e.txid), Err(Error::Envio(_))) {
+        fallos.push("cancelar liberando monedas fue posible".into());
+    }
+    let distintos = ficheros_distintos(antes, &instantanea(dir));
+    if !distintos.is_empty() {
+        fallos.push(format!(
+            "ficheros modificados por el reintento: {distintos:?}"
+        ));
+    }
+    if recibidas_total != 1 {
+        fallos.push(format!(
+            "recepciones de broadcast: {recibidas_total} (se esperaba 1: solo el primer intento)"
+        ));
+    }
+    assert!(
+        fallos.is_empty(),
+        "puerta «{puerta}» en el reintento: el estado Incierta no se conservó:\n  {}",
+        fallos.join("\n  ")
+    );
+}
+
+#[test]
+fn puerta_rechazo_tras_difusion_incierta_por_huella_sigue_incierta_y_reservada() {
+    let dir = tempfile::tempdir().unwrap();
+    let sim = Simulado::arrancar_tls(Network::Regtest);
+    let puerto = sim.puerto();
+    let mut b = billetera_emparejada(dir.path(), &sim);
+    let (e, antes) = dejar_incierta(dir.path(), &mut b, &sim);
+    // El servidor cae y en la MISMA dirección vuelve uno con otro certificado: la huella
+    // fijada ya no cuadra. El reintento se rechaza en el apretón TLS.
+    sim.parar();
+    let otro = Simulado::arrancar_tls_en(puerto, Network::Regtest);
+    assert_eq!(otro.url, sim.url);
+    assert_ne!(otro.huella(), sim.huella());
+    let r = b.difundir(&otro.url, &e.txid);
+    let recibio = sim.recibidas() + otro.recibidas();
+    exigir_incierta_intacta(
+        "huella",
+        dir.path(),
+        &mut b,
+        &antes,
+        &e,
+        r,
+        es_rechazo_huella,
+        recibio,
+    );
+}
+
+#[test]
+fn puerta_rechazo_tras_difusion_incierta_por_otra_red_sigue_incierta_y_reservada() {
+    let dir = tempfile::tempdir().unwrap();
+    let sim = Simulado::arrancar(Network::Regtest);
+    let puerto = sim.puerto();
+    let mut b = billetera_regtest(dir.path(), &sim);
+    let (e, antes) = dejar_incierta(dir.path(), &mut b, &sim);
+    // En la misma dirección aparece un servidor de OTRA red.
+    sim.parar();
+    let otro = Simulado::arrancar_en(puerto, Network::Signet);
+    assert_eq!(otro.url, sim.url);
+    let r = b.difundir(&otro.url, &e.txid);
+    let recibio = sim.recibidas() + otro.recibidas();
+    exigir_incierta_intacta(
+        "génesis",
+        dir.path(),
+        &mut b,
+        &antes,
+        &e,
+        r,
+        es_rechazo_red,
+        recibio,
+    );
+}
+
+#[test]
+fn puerta_rechazo_tras_difusion_incierta_por_protocolo_sigue_incierta_y_reservada() {
+    let dir = tempfile::tempdir().unwrap();
+    let sim = Simulado::arrancar_tls(Network::Regtest);
+    let mut b = billetera_emparejada(dir.path(), &sim);
+    let (e, antes) = dejar_incierta(dir.path(), &mut b, &sim);
+    // El mismo servidor pasa a anunciar otro protocolo y ahora sí respondería: el reintento
+    // tiene que rechazarse en la puerta, no llegar a transmitir.
+    sim.fijar_protocolo("1.5");
+    sim.fijar_difusion(Difusion::Aceptar);
+    let r = b.difundir(&sim.url, &e.txid);
+    let recibio = sim.recibidas();
+    exigir_incierta_intacta(
+        "protocolo",
+        dir.path(),
+        &mut b,
+        &antes,
+        &e,
+        r,
+        es_rechazo_protocolo,
+        recibio,
+    );
+}
+
+#[test]
+fn puerta_rechazo_tras_difusion_incierta_por_altura_sigue_incierta_y_reservada() {
+    let dir = tempfile::tempdir().unwrap();
+    let sim = Simulado::arrancar_tls(Network::Regtest);
+    let mut b = billetera_emparejada(dir.path(), &sim); // vista: 3
+    let (e, antes) = dejar_incierta(dir.path(), &mut b, &sim);
+    // El mismo servidor retrocede por debajo de lo visto y ahora sí respondería.
+    sim.retroceder_a(1);
+    sim.fijar_difusion(Difusion::Aceptar);
+    let r = b.difundir(&sim.url, &e.txid);
+    let recibio = sim.recibidas();
+    exigir_incierta_intacta(
+        "altura",
+        dir.path(),
+        &mut b,
+        &antes,
+        &e,
+        r,
+        es_rechazo_altura,
+        recibio,
+    );
+}
+
+// ----- 4: operación por operación, la conexión de la PROPIA operación rechaza al malo --------
+//
+// Escena común: billetera emparejada por TLS con huella y sincronizada (vista = 3) con un
+// envío firmado; la sonda `comprobar_nodo` pasa; justo después el mismo servidor (misma
+// huella, mismo génesis) se vuelve malo. Comprobar el nodo y después abrir OTRA conexión no
+// demuestra nada: lo que se exige es que la conexión que abre cada operación rechace al
+// servidor por su cuenta.
+
+struct Escena {
+    /// Mantiene vivo el directorio temporal mientras dura la escena.
+    _dir: tempfile::TempDir,
+    sim: Simulado,
+    b: Billetera,
+    txid: String,
+    vista: u32,
+}
+
+fn escena_sonda_pasa_y_luego_servidor_malo(estropear: fn(&Simulado)) -> Escena {
+    let dir = tempfile::tempdir().unwrap();
+    let sim = Simulado::arrancar_tls(Network::Regtest);
+    let mut b = billetera_emparejada(dir.path(), &sim);
+    let vista = b.altura();
+    let txid = firmar_40k(&mut b).txid;
+    let info = comprobar_nodo(Red::Regtest, &sim.url, Some(&sim.huella()), vista).unwrap();
+    assert_eq!((info.protocolo.as_str(), info.altura), ("1.4", vista));
+    estropear(&sim);
+    // La sonda, repetida ahora, lo rechaza: el servidor es malo de verdad.
+    assert!(comprobar_nodo(Red::Regtest, &sim.url, Some(&sim.huella()), vista).is_err());
+    Escena {
+        _dir: dir,
+        sim,
+        b,
+        txid,
+        vista,
+    }
+}
+
+fn protocolo_distinto(sim: &Simulado) {
+    sim.fijar_protocolo("1.5");
+}
+fn altura_retrocede(sim: &Simulado) {
+    sim.retroceder_a(1);
+}
+
+fn exigir_difusion_no_salio(s: &Escena) {
+    let e = s.b.estado_envio(&s.txid).unwrap();
+    assert_eq!((e.estado, e.intentos_difusion), (EstadoEnvio::Firmada, 0));
+    assert_eq!(
+        s.sim.recibidas(),
+        0,
+        "el servidor malo recibió la transacción"
+    );
+}
+
+#[test]
+fn puerta_protocolo_la_conexion_de_escanear_rechaza_al_servidor() {
+    let mut s = escena_sonda_pasa_y_luego_servidor_malo(protocolo_distinto);
+    let r = s.b.escanear(&s.sim.url);
+    exigir_rechazo("escanear", r, es_rechazo_protocolo);
+}
+
+#[test]
+fn puerta_protocolo_la_conexion_de_sincronizar_rechaza_al_servidor() {
+    let mut s = escena_sonda_pasa_y_luego_servidor_malo(protocolo_distinto);
+    let r = s.b.sincronizar(&s.sim.url);
+    exigir_rechazo("sincronizar", r, es_rechazo_protocolo);
+}
+
+#[test]
+fn puerta_protocolo_la_conexion_de_difundir_rechaza_al_servidor() {
+    let mut s = escena_sonda_pasa_y_luego_servidor_malo(protocolo_distinto);
+    let r = s.b.difundir(&s.sim.url, &s.txid);
+    exigir_rechazo("difundir", r, es_rechazo_protocolo);
+    exigir_difusion_no_salio(&s);
+}
+
+#[test]
+fn puerta_protocolo_la_conexion_de_altura_rechaza_al_servidor() {
+    let s = escena_sonda_pasa_y_luego_servidor_malo(protocolo_distinto);
+    let r = altura_red(Red::Regtest, &s.sim.url, Some(&s.sim.huella()), s.vista);
+    exigir_rechazo("altura_red", r, es_rechazo_protocolo);
+}
+
+#[test]
+fn puerta_protocolo_la_conexion_de_comision_rechaza_al_servidor() {
+    let s = escena_sonda_pasa_y_luego_servidor_malo(protocolo_distinto);
+    let r = estimar_comision(Red::Regtest, &s.sim.url, 2, Some(&s.sim.huella()), s.vista);
+    exigir_rechazo("estimar_comision", r, es_rechazo_protocolo);
+}
+
+#[test]
+fn puerta_altura_la_conexion_de_escanear_rechaza_al_servidor() {
+    let mut s = escena_sonda_pasa_y_luego_servidor_malo(altura_retrocede);
+    let r = s.b.escanear(&s.sim.url);
+    let op = format!(
+        "escanear (vista antes: {}, altura local después: {})",
+        s.vista,
+        s.b.altura()
+    );
+    exigir_rechazo(&op, r, es_rechazo_altura);
+}
+
+#[test]
+fn puerta_altura_la_conexion_de_sincronizar_rechaza_al_servidor() {
+    let mut s = escena_sonda_pasa_y_luego_servidor_malo(altura_retrocede);
+    let r = s.b.sincronizar(&s.sim.url);
+    let op = format!(
+        "sincronizar (vista antes: {}, altura local después: {})",
+        s.vista,
+        s.b.altura()
+    );
+    exigir_rechazo(&op, r, es_rechazo_altura);
+}
+
+#[test]
+fn puerta_altura_la_conexion_de_difundir_rechaza_al_servidor() {
+    let mut s = escena_sonda_pasa_y_luego_servidor_malo(altura_retrocede);
+    let r = s.b.difundir(&s.sim.url, &s.txid);
+    exigir_rechazo("difundir", r, es_rechazo_altura);
+    exigir_difusion_no_salio(&s);
+}
+
+#[test]
+fn puerta_altura_la_conexion_de_altura_rechaza_al_servidor() {
+    // `altura_red` recibe la última altura vista y la comprueba en su propia conexión.
+    let s = escena_sonda_pasa_y_luego_servidor_malo(altura_retrocede);
+    let r = altura_red(Red::Regtest, &s.sim.url, Some(&s.sim.huella()), s.vista);
+    exigir_rechazo(
+        &format!("altura_red (vista: {})", s.vista),
+        r,
+        es_rechazo_altura,
+    );
+}
+
+#[test]
+fn puerta_altura_la_conexion_de_comision_rechaza_al_servidor() {
+    // Igual que `altura_red`: `estimar_comision` recibe la última altura vista.
+    let s = escena_sonda_pasa_y_luego_servidor_malo(altura_retrocede);
+    let r = estimar_comision(Red::Regtest, &s.sim.url, 2, Some(&s.sim.huella()), s.vista);
+    exigir_rechazo(
+        &format!("estimar_comision (vista: {})", s.vista),
+        r,
+        es_rechazo_altura,
+    );
+}
+
+// ----- 2: el defecto del prefijo ------------------------------------------------------------
+
+#[test]
+fn puerta_sonda_rechaza_protocolos_que_solo_empiezan_por_1_4() {
+    // "1.40", "1.45", "1.4basura", "1.4." y "1.4.basura" no son el protocolo 1.4 ni una
+    // revisión suya (1.4.x):
+    // una comprobación por prefijo los deja pasar. Los positivos siguen en
+    // `puerta_sonda_rechaza_protocolo_distinto_de_1_4` ("1.4" y "1.4.2").
+    let sim = Simulado::arrancar_tls(Network::Regtest);
+    let huella = sim.huella();
+    let mut aceptados: Vec<String> = Vec::new();
+    for proto in ["1.40", "1.45", "1.4basura", "1.4.", "1.4.basura"] {
+        sim.fijar_protocolo(proto);
+        match comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), 0) {
+            Err(e) if es_rechazo_protocolo(&e) => {}
+            Err(e) => panic!("protocolo {proto:?}: rechazado, pero no por la puerta: {e}"),
+            Ok(info) => aceptados.push(format!("{proto:?} (anunciado como {:?})", info.protocolo)),
+        }
+    }
+    assert!(
+        aceptados.is_empty(),
+        "la sonda ACEPTÓ protocolos que no son 1.4: {}",
+        aceptados.join(", ")
+    );
+}
+
+// ----- 1: misma conexión, de verdad --------------------------------------------------------
+//
+// El simulado numera las conexiones y apunta la secuencia de métodos de cada una. Escena
+// adversaria: la sonda pasa; después el servidor es BUENO en la próxima conexión y MALO en
+// la siguiente (maldad por conexión, no global). Un motor que comprueba por una conexión y
+// opera por otra valida la buena y opera por la mala; un motor que valida su propia conexión
+// opera por la buena y la operación sale bien. Se exige: que la operación salga bien, que
+// viaje por UNA sola conexión, que esa misma conexión haya corrido antes `server.features`
+// (génesis), `server.version` (protocolo) y `blockchain.headers.subscribe` (altura), y que
+// ninguna petición haya llegado a una conexión mala.
+
+const GENESIS: &str = "server.features";
+const VERSION: &str = "server.version";
+const ALTURA: &str = "blockchain.headers.subscribe";
+const OP_HISTORIA: &str = "blockchain.scripthash.get_history";
+const OP_DIFUSION: &str = "blockchain.transaction.broadcast";
+const OP_COMISION: &str = "blockchain.estimatefee";
+
+fn escena_buena_en_la_proxima_y_mala_en_la_siguiente(maldad: Maldad) -> (Escena, u64, u64) {
+    let dir = tempfile::tempdir().unwrap();
+    let sim = Simulado::arrancar_tls(Network::Regtest);
+    let mut b = billetera_emparejada(dir.path(), &sim);
+    let vista = b.altura();
+    let txid = firmar_40k(&mut b).txid;
+    let info = comprobar_nodo(Red::Regtest, &sim.url, Some(&sim.huella()), vista).unwrap();
+    assert_eq!((info.protocolo.as_str(), info.altura), ("1.4", vista));
+    let desde = sim.proxima_conexion();
+    let mala_desde = desde + 1;
+    sim.fijar_maldad_desde(mala_desde, maldad);
+    (
+        Escena {
+            _dir: dir,
+            sim,
+            b,
+            txid,
+            vista,
+        },
+        desde,
+        mala_desde,
+    )
+}
+
+/// Entre las conexiones abiertas desde `desde`: exactamente una llevó `operacion`; esa misma
+/// corrió las tres validaciones antes de la operación; ninguna conexión mala recibió nada.
+fn exigir_validada_y_operada_en_la_misma_conexion(
+    sim: &Simulado,
+    desde: u64,
+    mala_desde: u64,
+    operacion: &str,
+) {
+    let conexiones: Vec<(u64, Vec<String>)> = sim
+        .conexiones()
+        .into_iter()
+        .filter(|(id, _)| *id >= desde)
+        .collect();
+    let mut fallos: Vec<String> = Vec::new();
+    for (id, metodos) in &conexiones {
+        if *id >= mala_desde && !metodos.is_empty() {
+            fallos.push(format!(
+                "la conexión {id} (MALA) recibió peticiones: {metodos:?}"
+            ));
+        }
+    }
+    let con_op: Vec<&(u64, Vec<String>)> = conexiones
+        .iter()
+        .filter(|(_, m)| m.iter().any(|x| x == operacion))
+        .collect();
+    if con_op.len() != 1 {
+        fallos.push(format!(
+            "{operacion} viajó por {} conexiones (se esperaba exactamente 1)",
+            con_op.len()
+        ));
+    } else {
+        let (id, metodos) = con_op[0];
+        let pos_op = metodos.iter().position(|m| m == operacion).unwrap();
+        for v in [GENESIS, VERSION, ALTURA] {
+            match metodos.iter().position(|m| m == v) {
+                Some(p) if p < pos_op || v == operacion => {}
+                Some(_) => fallos.push(format!("conexión {id}: {v} llegó DESPUÉS de {operacion}")),
+                None => fallos.push(format!(
+                    "conexión {id}: operó ({operacion}) sin haber corrido {v}"
+                )),
+            }
+        }
+    }
+    assert!(
+        fallos.is_empty(),
+        "la operación no viajó por una conexión validada por ella misma:\n  {}\n  conexiones desde la sonda: {conexiones:?}",
+        fallos.join("\n  ")
+    );
+}
+
+fn maldad_protocolo() -> Maldad {
+    Maldad::Protocolo("1.5".into())
+}
+fn maldad_altura() -> Maldad {
+    Maldad::AlturaTope(1)
+}
+
+fn escena_escanear(maldad: Maldad) {
+    let (mut s, desde, mala) = escena_buena_en_la_proxima_y_mala_en_la_siguiente(maldad);
+    s.b.escanear(&s.sim.url)
+        .expect("la próxima conexión es buena");
+    assert_eq!(s.b.altura(), s.vista);
+    exigir_validada_y_operada_en_la_misma_conexion(&s.sim, desde, mala, OP_HISTORIA);
+}
+
+fn escena_sincronizar(maldad: Maldad) {
+    let (mut s, desde, mala) = escena_buena_en_la_proxima_y_mala_en_la_siguiente(maldad);
+    s.b.sincronizar(&s.sim.url)
+        .expect("la próxima conexión es buena");
+    assert_eq!(s.b.altura(), s.vista);
+    exigir_validada_y_operada_en_la_misma_conexion(&s.sim, desde, mala, OP_HISTORIA);
+}
+
+fn escena_difundir(maldad: Maldad) {
+    let (mut s, desde, mala) = escena_buena_en_la_proxima_y_mala_en_la_siguiente(maldad);
+    let e =
+        s.b.difundir(&s.sim.url, &s.txid)
+            .expect("la próxima conexión es buena");
+    assert_eq!((e.estado, e.intentos_difusion), (EstadoEnvio::Enviada, 1));
+    assert_eq!(s.sim.recibidas(), 1);
+    exigir_validada_y_operada_en_la_misma_conexion(&s.sim, desde, mala, OP_DIFUSION);
+}
+
+fn escena_altura(maldad: Maldad) {
+    let (s, desde, mala) = escena_buena_en_la_proxima_y_mala_en_la_siguiente(maldad);
+    let h = altura_red(Red::Regtest, &s.sim.url, Some(&s.sim.huella()), s.vista)
+        .expect("la próxima conexión es buena");
+    assert_eq!(h, s.vista);
+    exigir_validada_y_operada_en_la_misma_conexion(&s.sim, desde, mala, ALTURA);
+}
+
+fn escena_comision(maldad: Maldad) {
+    let (s, desde, mala) = escena_buena_en_la_proxima_y_mala_en_la_siguiente(maldad);
+    let c = estimar_comision(Red::Regtest, &s.sim.url, 2, Some(&s.sim.huella()), s.vista)
+        .expect("la próxima conexión es buena");
+    assert_eq!(c, 2.0);
+    exigir_validada_y_operada_en_la_misma_conexion(&s.sim, desde, mala, OP_COMISION);
+}
+
+#[test]
+fn puerta_protocolo_escanear_valida_y_opera_por_la_misma_conexion() {
+    escena_escanear(maldad_protocolo());
+}
+#[test]
+fn puerta_protocolo_sincronizar_valida_y_opera_por_la_misma_conexion() {
+    escena_sincronizar(maldad_protocolo());
+}
+#[test]
+fn puerta_protocolo_difundir_valida_y_opera_por_la_misma_conexion() {
+    escena_difundir(maldad_protocolo());
+}
+#[test]
+fn puerta_protocolo_altura_valida_y_opera_por_la_misma_conexion() {
+    escena_altura(maldad_protocolo());
+}
+#[test]
+fn puerta_protocolo_comision_valida_y_opera_por_la_misma_conexion() {
+    escena_comision(maldad_protocolo());
+}
+#[test]
+fn puerta_altura_escanear_valida_y_opera_por_la_misma_conexion() {
+    escena_escanear(maldad_altura());
+}
+#[test]
+fn puerta_altura_sincronizar_valida_y_opera_por_la_misma_conexion() {
+    escena_sincronizar(maldad_altura());
+}
+#[test]
+fn puerta_altura_difundir_valida_y_opera_por_la_misma_conexion() {
+    escena_difundir(maldad_altura());
+}
+#[test]
+fn puerta_altura_altura_red_valida_y_opera_por_la_misma_conexion() {
+    escena_altura(maldad_altura());
+}
+#[test]
+fn puerta_altura_comision_valida_y_opera_por_la_misma_conexion() {
+    escena_comision(maldad_altura());
+}
+
+/// Cliente JSON-RPC mínimo de las pruebas, independiente del motor y de electrum-client:
+/// una conexión `tcp://` al simulado por la que se pide exactamente lo que se escribe.
+struct ClientePlano {
+    lector: std::io::BufReader<std::net::TcpStream>,
+    id: u64,
+}
+
+impl ClientePlano {
+    fn conectar(sim: &Simulado) -> ClientePlano {
+        let s = std::net::TcpStream::connect(("127.0.0.1", sim.puerto())).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        ClientePlano {
+            lector: std::io::BufReader::new(s),
+            id: 0,
+        }
+    }
+
+    fn pedir(&mut self, metodo: &str, params: serde_json::Value) -> serde_json::Value {
+        use std::io::{BufRead, Write};
+        self.id += 1;
+        let req = serde_json::json!({"jsonrpc": "2.0", "id": self.id, "method": metodo, "params": params});
+        writeln!(self.lector.get_mut(), "{req}").unwrap();
+        let mut linea = String::new();
+        self.lector.read_line(&mut linea).unwrap();
+        let resp: serde_json::Value = serde_json::from_str(&linea).unwrap();
+        assert_eq!(resp["id"], self.id);
+        resp["result"].clone()
+    }
+}
+
+#[test]
+fn simulado_la_maldad_por_conexion_distingue_conexiones() {
+    // Autocomprobación del simulado, SIN pasar por el motor (`Conexion::abrir` rechazará
+    // protocolo y altura en cada conexión cuando llegue el arreglo, y esta prueba debe seguir
+    // verde): la conexión N ve el servidor bueno y la N+1 el malo, y cada conexión queda
+    // apuntada con sus métodos en orden.
+    let sim = Simulado::arrancar(Network::Regtest);
+    sim.anadir_bloque(txid_cero());
+    sim.anadir_bloque(txid_cero()); // altura 2
+    let desde = sim.proxima_conexion();
+    sim.fijar_maldad_desde(desde + 1, Maldad::Protocolo("1.5".into()));
+    let mut buena = ClientePlano::conectar(&sim);
+    let mut mala = ClientePlano::conectar(&sim);
+    let version = serde_json::json!(["prueba", "1.4"]);
+    assert_eq!(
+        buena.pedir(GENESIS, serde_json::json!([]))["protocol_max"],
+        "1.4"
+    );
+    assert_eq!(buena.pedir(VERSION, version.clone())[1], "1.4");
+    assert_eq!(
+        mala.pedir(GENESIS, serde_json::json!([]))["protocol_max"],
+        "1.5"
+    );
+    assert_eq!(mala.pedir(VERSION, version)[1], "1.5");
+    // Misma pareja de conexiones, ahora con la cadena truncada para la mala.
+    sim.fijar_maldad_desde(desde + 1, Maldad::AlturaTope(0));
+    assert_eq!(buena.pedir(ALTURA, serde_json::json!([]))["height"], 2);
+    assert_eq!(
+        mala.pedir(ALTURA, serde_json::json!([]))["height"],
+        0,
+        "la conexión mala ve la cadena truncada"
+    );
+    // La mala no sirve cabeceras por encima del tope; la buena sí.
+    assert!(buena
+        .pedir("blockchain.block.header", serde_json::json!([2]))
+        .is_string());
+    assert!(mala
+        .pedir("blockchain.block.header", serde_json::json!([2]))
+        .is_null());
+    // Contabilidad: identificadores en orden y secuencia exacta de cada conexión.
+    let conexiones = sim.conexiones();
+    let de = |id: u64| conexiones.iter().find(|(i, _)| *i == id).unwrap().1.clone();
+    let esperada = vec![GENESIS, VERSION, ALTURA, "blockchain.block.header"];
+    assert_eq!(de(desde), esperada);
+    assert_eq!(de(desde + 1), esperada);
+    assert_eq!(sim.proxima_conexion(), desde + 2);
+    assert_eq!(sim.recibidas(), 0);
+    // Una tercera conexión también es mala (la maldad es «desde», no «solo esa»).
+    let mut tercera = ClientePlano::conectar(&sim);
+    assert_eq!(tercera.pedir(ALTURA, serde_json::json!([]))["height"], 0);
+    let ultima = sim.conexiones().last().unwrap().clone();
+    assert_eq!(ultima, (desde + 2, vec![ALTURA.to_string()]));
+}
+
+#[test]
+fn simulado_el_cliente_electrum_normal_negocia_version_por_su_cuenta() {
+    // Comportamiento de la BIBLIOTECA, no del motor: `electrum_client::Client` negocia
+    // `server.version` POR SU CUENTA al conectar, proponiendo el rango 1.4–1.6 con nombre de
+    // cliente vacío, guarda lo que el servidor responda en un campo privado sin lector y no
+    // lo compara con nada. Por eso el motor NO usa `Client::new`/`from_config`: con él habría
+    // dos negociaciones por sesión (la suya y la del motor; un servidor estricto rechaza la
+    // segunda), el servidor podría negociar 1.6 sin que el motor lo viera, y el motor no
+    // podría proponer 1.4 a secas. El motor abre el flujo él mismo y usa `RawClient::from`, que
+    // no negocia, y hace UNA negociación propia que valida. Esta prueba documenta el porqué.
+    use bdk_electrum::electrum_client::{Client, ConfigBuilder, ElectrumApi};
+    let sim = Simulado::arrancar(Network::Regtest);
+    sim.fijar_protocolo("1.5");
+    let id = sim.proxima_conexion();
+    let cfg = ConfigBuilder::new()
+        .timeout(Some(Duration::from_secs(2)))
+        .retry(0)
+        .build();
+    let c = Client::from_config(&sim.url, cfg).expect("electrum-client no rechaza el 1.5");
+    assert!(c.server_features().is_ok());
+    let metodos = sim
+        .conexiones()
+        .into_iter()
+        .find(|(i, _)| *i == id)
+        .unwrap()
+        .1;
+    assert_eq!(
+        metodos,
+        vec![VERSION, GENESIS],
+        "el primer server.version no lo pidió nadie"
+    );
+}
+
+// ----- B4, ajuste: retroceso recibido DURANTE BDK, una sola negociación, versión negociada -----
+
+fn metodos_desde(sim: &Simulado, desde: u64) -> Vec<(u64, Vec<String>)> {
+    sim.conexiones()
+        .into_iter()
+        .filter(|(id, _)| *id >= desde)
+        .collect()
+}
+
+/// El servidor valida bien al abrir (3) y, dentro de la MISMA conexión, responde a la petición
+/// de BDK con una altura inferior (`secuencia`, p. ej. 3→1 o 3→1→3). El motor debe detectar la
+/// altura inferior realmente recibida y abortar ANTES de `envios.observar`, `apply_update` y
+/// cualquier persistencia: estado idéntico en disco y en memoria. Una consulta final que
+/// volviera a dar 3 no vale: la secuencia 3→1→3 lo demuestra (la petición tercera nunca llega
+/// a hacerse).
+fn exigir_aborto_por_altura_durante_bdk(op: &str, secuencia: Vec<u32>) {
+    let dir = tempfile::tempdir().unwrap();
+    let sim = Simulado::arrancar_tls(Network::Regtest);
+    let mut b = billetera_emparejada(dir.path(), &sim); // vista: 3
+    let txid = firmar_40k(&mut b).txid;
+    assert!(comprobar_nodo(
+        Red::Regtest,
+        &sim.url,
+        huella_de(&sim).as_deref(),
+        b.altura()
+    )
+    .is_ok());
+    let desde = sim.proxima_conexion();
+    sim.fijar_alturas_por_respuesta(secuencia.clone());
+    exigir_rechazo_previo_sin_tocar_nada(
+        &format!("altura durante BDK {secuencia:?}"),
+        dir.path(),
+        &mut b,
+        &sim.url,
+        &sim,
+        Some(&txid),
+        es_rechazo_altura,
+        &[op],
+    );
+    // La conexión de la operación pidió la altura dos veces (validar y BDK) y se cortó ahí:
+    // nada después de la altura inferior, y la tercera respuesta (3) nunca se pidió.
+    let conexiones = metodos_desde(&sim, desde);
+    assert_eq!(conexiones.len(), 1, "{conexiones:?}");
+    assert_eq!(
+        conexiones[0].1,
+        vec![VERSION, GENESIS, ALTURA, ALTURA],
+        "secuencia {secuencia:?}"
+    );
+}
+
+#[test]
+fn puerta_altura_inferior_recibida_durante_sincronizar_3_1_aborta_sin_tocar_nada() {
+    exigir_aborto_por_altura_durante_bdk("sincronizar", vec![3, 1]);
+}
+#[test]
+fn puerta_altura_inferior_recibida_durante_sincronizar_3_1_3_aborta_sin_tocar_nada() {
+    exigir_aborto_por_altura_durante_bdk("sincronizar", vec![3, 1, 3]);
+}
+#[test]
+fn puerta_altura_inferior_recibida_durante_escanear_3_1_aborta_sin_tocar_nada() {
+    exigir_aborto_por_altura_durante_bdk("escanear", vec![3, 1]);
+}
+#[test]
+fn puerta_altura_inferior_recibida_durante_escanear_3_1_3_aborta_sin_tocar_nada() {
+    exigir_aborto_por_altura_durante_bdk("escanear", vec![3, 1, 3]);
+}
+
+#[test]
+fn puerta_altura_red_devuelve_la_altura_validada_sin_segunda_consulta() {
+    let dir = tempfile::tempdir().unwrap();
+    let sim = Simulado::arrancar_tls(Network::Regtest);
+    let b = billetera_emparejada(dir.path(), &sim);
+    let desde = sim.proxima_conexion();
+    assert_eq!(
+        altura_red(
+            Red::Regtest,
+            &sim.url,
+            huella_de(&sim).as_deref(),
+            b.altura()
+        )
+        .unwrap(),
+        3
+    );
+    let conexiones = metodos_desde(&sim, desde);
+    assert_eq!(conexiones.len(), 1);
+    assert_eq!(
+        conexiones[0].1,
+        vec![VERSION, GENESIS, ALTURA],
+        "la altura devuelta es la validada; no se consulta dos veces"
+    );
+}
+
+/// Servidor estricto que además negocia como uno real (responde lo que propone el cliente):
+/// todas las operaciones salen bien y cada conexión lleva EXACTAMENTE un `server.version`,
+/// porque el motor propone 1.4 a secas una sola vez. Con dos negociaciones por sesión (la de la
+/// biblioteca con rango 1.4–1.6 y la del motor) la segunda falla; y con solo la de la
+/// biblioteca, el servidor negociaría 1.6.
+fn exigir_una_sola_negociacion(sim: &Simulado) {
+    let dir = tempfile::tempdir().unwrap();
+    sim.fijar_estricto(true);
+    sim.fijar_negociar_segun_cliente(true);
+    let mut b = billetera_emparejada(dir.path(), sim); // sincroniza ya con el servidor estricto
+    let huella = huella_de(sim);
+    let desde = sim.proxima_conexion();
+    b.escanear(&sim.url).unwrap();
+    b.sincronizar(&sim.url).unwrap();
+    let txid = firmar_40k(&mut b).txid;
+    assert_eq!(
+        b.difundir(&sim.url, &txid).unwrap().estado,
+        EstadoEnvio::Enviada
+    );
+    assert_eq!(
+        altura_red(Red::Regtest, &sim.url, huella.as_deref(), b.altura()).unwrap(),
+        3
+    );
+    assert_eq!(
+        estimar_comision(Red::Regtest, &sim.url, 2, huella.as_deref(), b.altura()).unwrap(),
+        2.0
+    );
+    let info = comprobar_nodo(Red::Regtest, &sim.url, huella.as_deref(), b.altura()).unwrap();
+    assert_eq!(
+        info.protocolo, "1.4",
+        "la versión negociada es la que el motor propone"
+    );
+    for (id, metodos) in metodos_desde(sim, desde) {
+        assert_eq!(
+            metodos.iter().filter(|m| *m == VERSION).count(),
+            1,
+            "conexión {id}: una sola negociación; secuencia {metodos:?}"
+        );
+    }
+}
+
+#[test]
+fn puerta_una_sola_negociacion_server_version_por_conexion_tcp() {
+    exigir_una_sola_negociacion(&Simulado::arrancar(Network::Regtest));
+}
+#[test]
+fn puerta_una_sola_negociacion_server_version_por_conexion_tls_con_huella() {
+    exigir_una_sola_negociacion(&Simulado::arrancar_tls(Network::Regtest));
+}
+
+/// `server.features` anuncia 1.4 como mínimo y máximo, pero la versión efectivamente negociada
+/// en `server.version` es 1.6: lo que manda es la negociada. Todas las operaciones se niegan y
+/// nada cambia.
+fn exigir_rechazo_por_version_negociada(sim: &Simulado) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut b = billetera_emparejada(dir.path(), sim);
+    let txid = firmar_40k(&mut b).txid;
+    let huella = huella_de(sim);
+    sim.fijar_protocolo_negociado("1.6");
+    let err = comprobar_nodo(Red::Regtest, &sim.url, huella.as_deref(), 0).unwrap_err();
+    assert!(es_rechazo_protocolo(&err), "{err}");
+    exigir_rechazo(
+        "altura_red",
+        altura_red(Red::Regtest, &sim.url, huella.as_deref(), 0),
+        es_rechazo_protocolo,
+    );
+    exigir_rechazo(
+        "estimar_comision",
+        estimar_comision(Red::Regtest, &sim.url, 2, huella.as_deref(), 0),
+        es_rechazo_protocolo,
+    );
+    exigir_rechazo_previo_sin_tocar_nada(
+        "versión negociada 1.6 con features 1.4",
+        dir.path(),
+        &mut b,
+        &sim.url,
+        sim,
+        Some(&txid),
+        es_rechazo_protocolo,
+        &TODAS,
+    );
+}
+
+#[test]
+fn puerta_version_negociada_no_admitida_aunque_features_compatibles_tcp() {
+    exigir_rechazo_por_version_negociada(&Simulado::arrancar(Network::Regtest));
+}
+#[test]
+fn puerta_version_negociada_no_admitida_aunque_features_compatibles_tls_con_huella() {
+    exigir_rechazo_por_version_negociada(&Simulado::arrancar_tls(Network::Regtest));
+}
+
+// ----- B4, marca de altura máxima vista; server.version primero; sin reconexión interna -----
+
+/// Deja el simulado con `n` bloques y la billetera (si se pasa) sincronizada hasta ahí.
+fn crecer_hasta(sim: &Simulado, b: Option<&mut Billetera>, n: u32) {
+    while sim.estado.lock().unwrap().cabeceras.len() as u32 <= n {
+        sim.anadir_bloque(txid_cero());
+    }
+    if let Some(b) = b {
+        b.sincronizar(&sim.url).unwrap();
+        assert_eq!(b.altura(), n);
+    }
+}
+
+/// La altura mínima no basta: dentro de una sesión el servidor anuncia 500 y después 200. Las
+/// dos superan la mínima (`minima`), pero la segunda retrocede de lo que el PROPIO servidor
+/// ya dijo en esa conexión. La marca de altura máxima vista debe rechazarla, y el rechazo
+/// deja estado y ficheros intactos (ayudante de siempre).
+fn exigir_rechazo_por_retroceso_dentro_de_la_sesion(op: &str, minima: u32) {
+    let dir = tempfile::tempdir().unwrap();
+    let sim = Simulado::arrancar_tls(Network::Regtest);
+    let mut b = if minima == 0 {
+        // Billetera recién creada: nada visto todavía (altura 0, sin fondos ni envíos).
+        let mut b = Billetera::crear(mn(), Red::Regtest, &dir.path().join("b.dat")).unwrap();
+        b.fijar_espera(Duration::from_secs(1));
+        b.fijar_huella_servidor(huella_de(&sim));
+        b
+    } else {
+        let mut b = billetera_emparejada(dir.path(), &sim);
+        crecer_hasta(&sim, Some(&mut b), minima);
+        b
+    };
+    assert_eq!(b.altura(), minima);
+    let txid = (minima > 0).then(|| firmar_40k(&mut b).txid);
+    crecer_hasta(&sim, None, 500);
+    let desde = sim.proxima_conexion();
+    sim.fijar_alturas_por_respuesta(vec![500, 200]);
+    exigir_rechazo_previo_sin_tocar_nada(
+        &format!("altura {minima} → 500 → 200 en la misma sesión"),
+        dir.path(),
+        &mut b,
+        &sim.url,
+        &sim,
+        txid.as_deref(),
+        es_rechazo_altura,
+        &[op],
+    );
+    // Una sola conexión, cortada en la segunda altura.
+    let conexiones = metodos_desde(&sim, desde);
+    assert_eq!(conexiones.len(), 1, "{conexiones:?}");
+    assert_eq!(
+        conexiones[0].1.iter().filter(|m| *m == ALTURA).count(),
+        2,
+        "{:?}",
+        conexiones[0].1
+    );
+    assert_eq!(conexiones[0].1.last().map(String::as_str), Some(ALTURA));
+}
+
+#[test]
+fn puerta_marca_altura_100_500_200_rechaza_en_sincronizar() {
+    exigir_rechazo_por_retroceso_dentro_de_la_sesion("sincronizar", 100);
+}
+#[test]
+fn puerta_marca_altura_100_500_200_rechaza_en_escanear() {
+    exigir_rechazo_por_retroceso_dentro_de_la_sesion("escanear", 100);
+}
+#[test]
+fn puerta_marca_altura_0_500_200_rechaza_en_sincronizar() {
+    exigir_rechazo_por_retroceso_dentro_de_la_sesion("sincronizar", 0);
+}
+#[test]
+fn puerta_marca_altura_0_500_200_rechaza_en_escanear() {
+    exigir_rechazo_por_retroceso_dentro_de_la_sesion("escanear", 0);
+}
+
+/// Servidor que exige `server.version` como PRIMER mensaje de cada sesión (especificación
+/// Electrum): todas las operaciones salen bien y en cada conexión el primer método es la
+/// negociación.
+fn exigir_negociacion_como_primer_mensaje(sim: &Simulado) {
+    let dir = tempfile::tempdir().unwrap();
+    sim.fijar_negociacion_primero(true);
+    let mut b = billetera_emparejada(dir.path(), sim);
+    let huella = huella_de(sim);
+    let desde = sim.proxima_conexion();
+    b.escanear(&sim.url).unwrap();
+    b.sincronizar(&sim.url).unwrap();
+    let txid = firmar_40k(&mut b).txid;
+    assert_eq!(
+        b.difundir(&sim.url, &txid).unwrap().estado,
+        EstadoEnvio::Enviada
+    );
+    assert_eq!(
+        altura_red(Red::Regtest, &sim.url, huella.as_deref(), b.altura()).unwrap(),
+        3
+    );
+    assert_eq!(
+        estimar_comision(Red::Regtest, &sim.url, 2, huella.as_deref(), b.altura()).unwrap(),
+        2.0
+    );
+    assert!(comprobar_nodo(Red::Regtest, &sim.url, huella.as_deref(), b.altura()).is_ok());
+    for (id, metodos) in metodos_desde(sim, desde) {
+        assert_eq!(
+            metodos.first().map(String::as_str),
+            Some(VERSION),
+            "conexión {id}: la negociación no fue el primer mensaje: {metodos:?}"
+        );
+    }
+}
+
+#[test]
+fn puerta_server_version_es_el_primer_mensaje_de_la_sesion_tcp() {
+    exigir_negociacion_como_primer_mensaje(&Simulado::arrancar(Network::Regtest));
+}
+#[test]
+fn puerta_server_version_es_el_primer_mensaje_de_la_sesion_tls_con_huella() {
+    exigir_negociacion_como_primer_mensaje(&Simulado::arrancar_tls(Network::Regtest));
+}
+
+#[test]
+fn puerta_una_conexion_caida_no_se_reabre_sola_y_la_siguiente_pasa_las_cuatro_puertas() {
+    // Propiedad que antes garantizaba `retry(0)` del cliente de electrum-client y ahora
+    // garantiza la construcción: `RawClient` no tiene reconexión. Una conexión cuyo servidor
+    // cae NO se reabre por dentro (el servidor que vuelve en la misma dirección no ve ninguna
+    // conexión nueva de la antigua), y la operación siguiente abre una conexión nueva que pasa
+    // las cuatro puertas antes de operar.
+    use crate::nodo::Conexion;
+    let dir = tempfile::tempdir().unwrap();
+    let sim = Simulado::arrancar(Network::Regtest);
+    let puerto = sim.puerto();
+    let mut b = billetera_emparejada(dir.path(), &sim); // vista: 3
+    let c = Conexion::abrir(&sim.url, Network::Regtest, None, Duration::from_secs(2), 3).unwrap();
+    assert_eq!(c.altura().unwrap(), 3);
+    sim.parar();
+    let otro = Simulado::arrancar_en(puerto, Network::Regtest);
+    assert_eq!(otro.url, sim.url);
+    // La conexión antigua falla y sigue fallando: ningún intento de reabrir por dentro.
+    for _ in 0..3 {
+        assert!(matches!(c.altura(), Err(Error::Red(_))));
+        assert!(matches!(c.comision_btc_kvb(2), Err(Error::Red(_))));
+    }
+    assert!(
+        otro.conexiones().is_empty(),
+        "la conexión caída abrió sola otra: {:?}",
+        otro.conexiones()
+    );
+    // El servidor nuevo empieza de cero (altura 0 < 3 vista): la operación siguiente abre una
+    // conexión nueva, pasa las puertas y lo rechaza por altura.
+    exigir_rechazo("sincronizar", b.sincronizar(&otro.url), es_rechazo_altura);
+    let conexiones = otro.conexiones();
+    assert_eq!(conexiones.len(), 1, "{conexiones:?}");
+    assert_eq!(conexiones[0].1, vec![VERSION, GENESIS, ALTURA]);
+    // Y cuando el servidor nuevo alcanza lo visto, la operación siguiente vuelve a pasar las
+    // cuatro puertas en su propia conexión y opera.
+    crecer_hasta(&otro, None, 3);
+    let desde = otro.proxima_conexion();
+    assert_eq!(
+        altura_red(Red::Regtest, &otro.url, None, b.altura()).unwrap(),
+        3
+    );
+    assert_eq!(
+        metodos_desde(&otro, desde)[0].1,
+        vec![VERSION, GENESIS, ALTURA]
+    );
+}
+
+#[test]
+fn vigilado_marca_de_altura_maxima_es_atomica_y_sube() {
+    // Unidad del vigilante, sin red: la marca empieza en la mínima, sube con cada altura
+    // anunciada y rechaza cualquier altura inferior a la marca, no solo a la mínima.
+    use crate::nodo::Vigilado;
+    let v = Vigilado::nuevo((), 100);
+    assert!(v.comprobar_altura(100).is_ok(), "igual a la mínima");
+    assert!(v.comprobar_altura(500).is_ok(), "sube a 500");
+    let err = v.comprobar_altura(200).unwrap_err().to_string();
+    assert!(
+        err.contains("por detrás") && err.contains("200") && err.contains("500"),
+        "{err}"
+    );
+    assert!(v.comprobar_altura(500).is_ok(), "igual a la marca");
+    assert!(v.comprobar_altura(501).is_ok());
+    assert!(v.comprobar_altura(499).is_err(), "la marca ya es 501");
+    // Desde cero: 500 y después 200 también se rechaza (la mínima 0 no bastaría).
+    let v = Vigilado::nuevo((), 0);
+    assert!(v.comprobar_altura(500).is_ok());
+    assert!(v.comprobar_altura(200).is_err());
+    // Fuera de u32: error, y la marca no cambia.
+    if usize::BITS > 32 {
+        let err = v
+            .comprobar_altura(u32::MAX as usize + 1)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("fuera de rango"), "{err}");
+        assert!(v.comprobar_altura(500).is_ok(), "la marca sigue en 500");
+    }
 }

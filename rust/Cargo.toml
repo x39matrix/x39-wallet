@@ -33,6 +33,9 @@ uniffi = { version = "=0.32.2" }
 rustls = { version = "0.23", default-features = false, features = ["std", "aws-lc-rs", "tls12", "logging"] }
 rustls-webpki = { version = "0.103", default-features = false, features = ["std", "aws-lc-rs"] }
 rustls-pki-types = { version = "1", features = ["std"] }
+# Raíces públicas para ssl:// SIN huella (el servidor público de signet): la misma versión que
+# ya trae electrum-client; el motor abre el flujo TLS él mismo (ver nodo.rs).
+webpki-roots = "0.25"
 
 [dev-dependencies]
 hex = "0.4"

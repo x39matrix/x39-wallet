@@ -482,21 +482,42 @@ fn ya_conocida(e: &electrum_client::Error) -> bool {
 
 /// Altura del último bloque que conoce el servidor (de la red `red`, verificada). `huella`:
 /// huella SPKI del certificado con `ssl://`, la misma que en el resto de operaciones.
-pub fn altura_red(red: Red, servidor: &str, huella: Option<&str>) -> Result<u32, Error> {
-    let c = Conexion::abrir(servidor, red.permitida()?.network(), huella, ESPERA_RED)?;
-    c.altura()
+/// `altura_vista`: la última altura que ya se vio (0 si ninguna); un servidor por debajo se
+/// rechaza como en cualquier otra operación.
+pub fn altura_red(
+    red: Red,
+    servidor: &str,
+    huella: Option<&str>,
+    altura_vista: u32,
+) -> Result<u32, Error> {
+    // La altura validada al abrir (puerta 4) es la respuesta: sin segunda consulta.
+    let (_, v) = Conexion::abrir_validada(
+        servidor,
+        red.permitida()?.network(),
+        huella,
+        ESPERA_RED,
+        altura_vista,
+    )?;
+    Ok(v.altura)
 }
 
 /// Comisión recomendada en sat/vB para confirmar en `bloques` bloques, según el nodo.
 /// Si el nodo no tiene estimación (pasa en signet con poco tráfico) usa su comisión
-/// mínima de retransmisión. Nunca menos de 1 sat/vB.
+/// mínima de retransmisión. Nunca menos de 1 sat/vB. `altura_vista`: como en [`altura_red`].
 pub fn estimar_comision(
     red: Red,
     servidor: &str,
     bloques: usize,
     huella: Option<&str>,
+    altura_vista: u32,
 ) -> Result<f64, Error> {
-    let c = Conexion::abrir(servidor, red.permitida()?.network(), huella, ESPERA_RED)?;
+    let c = Conexion::abrir(
+        servidor,
+        red.permitida()?.network(),
+        huella,
+        ESPERA_RED,
+        altura_vista,
+    )?;
     let btc_kvb = c.comision_btc_kvb(bloques)?;
     // BTC/kvB → sat/vB: ×1e8 sat/BTC ÷ 1000 vB/kvB.
     Ok((btc_kvb * 100_000.0).max(1.0))
@@ -720,8 +741,17 @@ impl Billetera {
             .filter(|h| !h.is_empty());
     }
 
+    /// Conexión para una operación de esta billetera: pasa las cuatro puertas con la altura
+    /// hasta la que la billetera ya está sincronizada como mínima (un servidor que ha
+    /// retrocedido respecto a lo que esta billetera vio se rechaza antes de operar).
     fn conexion(&self, servidor: &str) -> Result<Conexion, Error> {
-        Conexion::abrir(servidor, self.red, self.huella.as_deref(), self.espera)
+        Conexion::abrir(
+            servidor,
+            self.red,
+            self.huella.as_deref(),
+            self.espera,
+            self.altura(),
+        )
     }
 
     fn guardar(&mut self) -> Result<(), Error> {
