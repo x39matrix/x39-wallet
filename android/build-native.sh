@@ -11,6 +11,7 @@
 #                                         compara la suma con la del lock; no toca el repo
 #   android/build-native.sh --autoprueba  comprueba que el detector de rutas/usuario falla de
 #                                         verdad con una .so adulterada a propósito
+#   En todos los modos se niega a correr si otro cargo (p. ej. `cargo test`) usa el mismo target.
 set -euo pipefail
 
 # ---- versiones fijadas (cambiarlas aquí es un cambio revisable) -----------------------
@@ -109,6 +110,32 @@ else
     SALIDA_JNI="$RAIZ/android/wallet/src/main/jniLibs"
     SALIDA_KT="$RAIZ/android/wallet/src/main/java"
 fi
+
+# ---- candado: nadie más puede estar usando este target ----------------------------------
+# Un `cargo test` (u otro build-native) en paralelo sobre el mismo target produce resultados
+# falsos (se vio un «la biblioteca no es AArch64» espurio). Se comprueba de dos formas:
+#  1. los candados de cargo (`.cargo-lock`) del target deben poder tomarse con flock -n
+#     (cargo solo los mantiene mientras compila, no mientras ejecuta las pruebas);
+#  2. por eso además ningún proceso cargo/rustc puede tener su directorio de trabajo dentro
+#     de rust/ (su target por defecto es este) ni apuntar con CARGO_TARGET_DIR a este target.
+# Además el propio script toma un candado exclusivo durante toda la ejecución.
+mkdir -p "$CARGO_TARGET_DIR"
+en_uso() { fallo "el target $CARGO_TARGET_DIR está en uso por otro proceso ($*); espera a que termine y vuelve a lanzar"; }
+while IFS= read -r -d '' cl; do
+    flock -n "$cl" true || en_uso "candado de cargo tomado: $cl"
+done < <(find "$CARGO_TARGET_DIR" -maxdepth 3 -name .cargo-lock -print0 2>/dev/null)
+for pid in $(pgrep -x 'cargo|rustc|cargo-ndk|rustdoc' 2>/dev/null); do
+    [ "$pid" = "$$" ] && continue
+    cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null || true)"
+    if [ "$CARGO_TARGET_DIR" = "$RUST_DIR/target" ]; then
+        case "$cwd" in "$RUST_DIR"|"$RUST_DIR"/*) en_uso "pid $pid trabaja en $cwd (su target por defecto es este)";; esac
+    fi
+    if tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -qx "CARGO_TARGET_DIR=$CARGO_TARGET_DIR"; then
+        en_uso "pid $pid usa CARGO_TARGET_DIR=$CARGO_TARGET_DIR"
+    fi
+done
+exec 9>"$CARGO_TARGET_DIR/.build-native.lock"
+flock -n 9 || en_uso "otro build-native.sh en marcha"
 
 # ---- compilación ----------------------------------------------------------------------
 # Sin rutas de la máquina dentro de la biblioteca y alineación de 16 KB explícita (además
