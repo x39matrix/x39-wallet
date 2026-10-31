@@ -124,11 +124,29 @@ interface NodeBridge {
     suspend fun conexionSana(): ConexionMotor?
 }
 
+/** Texto exacto que emite el motor (`rust/src/nodo.rs`, puerta de la altura). */
+private val REGEX_ALTURA_ATRASADA =
+    Regex("""el servidor va por detrás: altura (\d+), ya se había visto (\d+)""")
+
 /**
- * Implementación con el motor Rust (`comprobarNodo`): comprobaciones en orden (génesis,
- * huella, altura, protocolo, latencia), reconexión con espera creciente y azar, modo de
- * túnel externo (solo comprueba que hay una VPN activa y que el nodo responde a través de
- * ella). Toda la red en `Dispatchers.IO`.
+ * Si el error es el rechazo del motor por altura, lo traduce al texto de la app; si no, `null`.
+ * Es el único sitio donde la app depende de la cadena del motor: la prueba instrumentada la
+ * ejercita contra la biblioteca nativa real.
+ */
+internal fun mensajeAlturaSiAplica(msg: String?): String? {
+    if (msg == null) return null
+    val m = REGEX_ALTURA_ATRASADA.find(msg) ?: return null
+    val (remota, exigida) = m.destructured
+    return "ese nodo va por detrás de lo ya visto: bloque $remota frente a $exigida"
+}
+
+/**
+ * Implementación con el motor Rust (`comprobarNodo`): las cuatro puertas de B4 en el orden del
+ * motor (huella/TLS, protocolo 1.4 y latencia por `server.version` como primer mensaje,
+ * génesis, altura), reconexión con espera creciente y azar, modo de túnel externo (solo
+ * comprueba que hay una VPN activa y que el nodo responde a través de ella). La altura mínima
+ * exigida es la mayor entre el suelo persistido de la billetera (`alturaSuelo`, por red) y la
+ * marca máxima vista en esta sesión (`alturaVista`). Toda la red en `Dispatchers.IO`.
  */
 @RequiresApi(Build.VERSION_CODES.M)
 class NodeBridgeImpl(
@@ -141,6 +159,12 @@ class NodeBridgeImpl(
     private val comprobador: (ConfigNodo, UInt) -> NodoInfo = { c, alturaMin -> comprobarNodo(c.red, c.electrum, c.huellaServidor, alturaMin) },
     /** Despachador para la red; `Dispatchers.IO` en la app, `Unconfined` en las pruebas JVM. */
     private val io: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.IO,
+    /**
+     * Suelo de altura por red: la altura hasta la que la billetera abierta ya está sincronizada
+     * (persistida en estado.dat), o 0 si no hay billetera abierta de esa red. Un nodo por
+     * debajo del suelo se rechaza aunque sea la primera sonda de la sesión.
+     */
+    private val alturaSuelo: (Red) -> UInt = { 0u },
 ) : NodeBridge {
 
     /**
@@ -176,21 +200,22 @@ class NodeBridgeImpl(
      */
     private val cerrojo = Mutex()
 
-    override suspend fun configurar(config: ConfigNodo): EstadoNodo {
-        config.invalida()?.let { return EstadoNodo.Caido(0, it, 0).also { e -> _estado.value = e } }
+    override suspend fun configurar(config: ConfigNodo): EstadoNodo = withContext(io) {
+        config.invalida()?.let { return@withContext EstadoNodo.Caido(0, it, 0).also { e -> _estado.value = e } }
+        val suelo = alturaSuelo(config.red)
         cerrojo.withLock {
             try {
                 ajustes.guardar(config)
             } catch (ex: Exception) {
                 // No persistido: la activa sigue siendo la anterior (el almacén restaura la suya).
-                return EstadoNodo.Caido(0, "no se pudo guardar la configuración del nodo: ${ex.message ?: ex.javaClass.simpleName}", 0).also { e -> _estado.value = e }
+                return@withContext EstadoNodo.Caido(0, "no se pudo guardar la configuración del nodo: ${ex.message ?: ex.javaClass.simpleName}", 0).also { e -> _estado.value = e }
             }
             activa = config
             generacion.incrementAndGet()
-            alturaVista = 0u
+            alturaVista = maxOf(suelo, alturaSuelo(config.red))
             caidoDesde = 0
         }
-        return comprobar()
+        comprobar()
     }
 
     override suspend fun olvidar() {
@@ -205,14 +230,16 @@ class NodeBridgeImpl(
     }
 
     override suspend fun probar(config: ConfigNodo): EstadoNodo = withContext(io) {
-        // Un candidato se comprueba desde cero (sin historial de altura) y no toca nada del vigente.
-        comprobarUnaVez(config, 0u)
+        // Un candidato se comprueba sin el historial de la sesión, pero con el suelo persistido de
+        // la billetera de su red; no toca nada del vigente.
+        comprobarUnaVez(config, alturaSuelo(config.red))
     }
 
     override suspend fun adoptarSiSano(config: ConfigNodo, paquete: PaqueteEmparejamiento?): EstadoNodo = withContext(io) {
         val gen = generacion.get()
+        val suelo = alturaSuelo(config.red)
         // Comprobación lenta FUERA del cerrojo; su resultado es del candidato, no del vigente.
-        val e = comprobarUnaVez(config, 0u)
+        val e = comprobarUnaVez(config, suelo)
         if (e !is EstadoNodo.Sano) return@withContext e
         cerrojo.withLock {
             // Dentro del cerrojo: descartado (cancelación) o cambiado (otro configurar/olvidar
@@ -220,6 +247,14 @@ class NodeBridgeImpl(
             ensureActive()
             if (gen != generacion.get()) {
                 return@withLock EstadoNodo.Caido(0, "la configuración del nodo cambió durante la comprobación: no se guarda", 0)
+            }
+            val sueloActual = maxOf(suelo, alturaSuelo(config.red))
+            if (e.info.altura < sueloActual) {
+                return@withLock EstadoNodo.Caido(
+                    0,
+                    "ese nodo va por detrás de lo ya visto: bloque ${e.info.altura} frente a $sueloActual",
+                    0,
+                )
             }
             try {
                 ajustes.guardar(config, paquete)
@@ -230,7 +265,7 @@ class NodeBridgeImpl(
             }
             activa = config
             val nueva = generacion.incrementAndGet()
-            alturaVista = e.info.altura
+            alturaVista = maxOf(sueloActual, e.info.altura)
             caidoDesde = 0
             generacionSano = nueva
             _estado.value = e
@@ -239,8 +274,9 @@ class NodeBridgeImpl(
     }
 
     override suspend fun comprobar(): EstadoNodo = withContext(io) {
-        val (gen, c, alturaMin) = cerrojo.withLock { Triple(generacion.get(), activa, alturaVista) }
+        val (gen, c, vista) = cerrojo.withLock { Triple(generacion.get(), activa, alturaVista) }
         if (c == null) return@withContext EstadoNodo.SinConfigurar.also { _estado.value = it }
+        val alturaMin = maxOf(vista, alturaSuelo(c.red))
         _estado.value = EstadoNodo.Conectando
         val e = comprobarUnaVez(c, alturaMin)
         cerrojo.withLock {
@@ -286,7 +322,8 @@ class NodeBridgeImpl(
         } catch (e: x39.wallet.Exception.RedProhibida) {
             EstadoNodo.Caido(0, "red no permitida en esta edición", 0)
         } catch (e: Exception) {
-            EstadoNodo.Caido(0, e.message ?: e.javaClass.simpleName, 0)
+            val msg = mensajeAlturaSiAplica(e.message) ?: e.message ?: e.javaClass.simpleName
+            EstadoNodo.Caido(0, msg, 0)
         }
     }
 

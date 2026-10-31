@@ -19,7 +19,7 @@ object Billeteras {
         val clave = clave(fichero)
         check(clave !in abiertas) { "ya abierta en este proceso" }
         val motor = mnemonico.usar { Billetera.crear(it, red, fichero.path) }
-        BilleteraAbierta(clave, motor).also { abiertas[clave] = it }
+        BilleteraAbierta(clave, red, motor).also { abiertas[clave] = it }
     }
 
     /** Abre una billetera existente (sin semilla) y reanuda los envíos sin resolver. */
@@ -27,7 +27,7 @@ object Billeteras {
         val clave = clave(fichero)
         check(clave !in abiertas) { "ya abierta en este proceso" }
         val motor = Billetera.abrir(fichero.path, red)
-        BilleteraAbierta(clave, motor).also { abiertas[clave] = it }
+        BilleteraAbierta(clave, red, motor).also { abiertas[clave] = it }
     }
 
     /** La billetera abierta sobre ese fichero, si la hay. */
@@ -44,6 +44,8 @@ object Billeteras {
 /** Billetera viva: envuelve el objeto nativo y lo libera al cerrar. */
 class BilleteraAbierta internal constructor(
     private val clave: String,
+    /** Red de la billetera: el suelo de altura solo vale para un nodo de la MISMA red. */
+    val red: Red,
     val motor: Billetera,
 ) : AutoCloseable {
 

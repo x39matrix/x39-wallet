@@ -336,4 +336,61 @@ class NodeBridgeTest {
         assertEquals("sano: 60 s", 60_000L, esperas[3])
         assertEquals(60_000L, esperas[4])
     }
+
+    /** Motor simulado con la puerta de la altura: lanza el error del motor si el servidor va por detrás. */
+    private fun motorConAltura(altura: () -> UInt): (ConfigNodo, UInt) -> NodoInfo = { _, min ->
+        val h = altura()
+        if (h < min) throw x39.wallet.Exception.Red("servidor Electrum: el servidor va por detrás: altura $h, ya se había visto $min")
+        info(h)
+    }
+
+    @Test
+    fun sueloPersistido_rechazaUnNodoPorDebajo_enComprobarProbarYAdoptar_ySoloParaSuRed() = runBlocking {
+        val mem = Memoria()
+        // Suelo 200.000 para signet (la red de la billetera abierta); 0 para cualquier otra red.
+        val suelo: (Red) -> UInt = { red -> if (red == Red.SIGNET) 200_000u else 0u }
+        val nb = NodeBridgeImpl(mem, CoroutineScope(Dispatchers.Unconfined), { false }, { }, motorConAltura { 150_000u }, Dispatchers.Unconfined, alturaSuelo = suelo)
+        val esperado = "ese nodo va por detrás de lo ya visto: bloque 150000 frente a 200000"
+        val c = nb.configurar(configOk)
+        assertTrue("$c", c is EstadoNodo.Caido && c.ultimoError == esperado)
+        val p = nb.probar(configOk)
+        assertTrue("$p", p is EstadoNodo.Caido && p.ultimoError == esperado)
+        nb.olvidar()
+        val a = nb.adoptarSiSano(configOk, paqueteOk)
+        assertTrue("$a", a is EstadoNodo.Caido && a.ultimoError == esperado)
+        assertNull("no se adopta un nodo por debajo del suelo", mem.c)
+        // Un nodo de OTRA red no tiene suelo (0): 150.000 es aceptable.
+        val otraRed = nb.probar(configOk.copy(red = Red.REGTEST))
+        assertTrue("$otraRed", otraRed is EstadoNodo.Sano && otraRed.info.altura == 150_000u)
+    }
+
+    @Test
+    fun laMarcaMaximaDeLaSesionSigueVivaPorEncimaDelSuelo() = runBlocking {
+        var altura = 200_050u
+        val nb = NodeBridgeImpl(Memoria(), CoroutineScope(Dispatchers.Unconfined), { false }, { }, motorConAltura { altura }, Dispatchers.Unconfined, alturaSuelo = { 200_000u })
+        val sano = nb.configurar(configOk)
+        assertTrue("$sano", sano is EstadoNodo.Sano && sano.info.altura == 200_050u)
+        // El servidor retrocede por debajo de lo que ya anunció, aunque siga por encima del suelo.
+        altura = 200_010u
+        val e = nb.comprobar()
+        assertTrue("$e", e is EstadoNodo.Caido && e.ultimoError == "ese nodo va por detrás de lo ya visto: bloque 200010 frente a 200050")
+    }
+
+    @Test
+    fun adoptarSiSano_revisaElSueloOtraVezAntesDeAdoptar() = runBlocking {
+        val mem = Memoria()
+        var sueloActual = 100_000u
+        // El candidato responde 150.000 (>= suelo inicial 100.000), pero mientras dura la sonda
+        // la billetera sincroniza y sube el suelo a 200.000: no debe adoptarse ni guardarse.
+        val comprobador: (ConfigNodo, UInt) -> NodoInfo = { _, min ->
+            val h = 150_000u
+            if (h < min) throw x39.wallet.Exception.Red("servidor Electrum: el servidor va por detrás: altura $h, ya se había visto $min")
+            sueloActual = 200_000u
+            info(h)
+        }
+        val nb = NodeBridgeImpl(mem, CoroutineScope(Dispatchers.Unconfined), { false }, { }, comprobador, Dispatchers.Unconfined, alturaSuelo = { sueloActual })
+        val a = nb.adoptarSiSano(configOk, paqueteOk)
+        assertTrue("$a", a is EstadoNodo.Caido && a.ultimoError == "ese nodo va por detrás de lo ya visto: bloque 150000 frente a 200000")
+        assertNull("no se adopta si el suelo subió durante la sonda", mem.c)
+    }
 }

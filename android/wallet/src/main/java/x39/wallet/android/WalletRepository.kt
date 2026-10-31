@@ -64,9 +64,19 @@ class WalletRepository(context: Context) : Repositorio {
     /** Marca persistida: restaurada sin escanear; sobrevive al cierre del proceso. */
     private val marcaEscaneo = File(fichero.path + ".escaneo-pendiente")
     private val ambito = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
+    @Volatile private var abierta: BilleteraAbierta? = null
     /** El nodo del usuario: la billetera no sincroniza ni difunde si no está sano. */
-    override val nodo: NodeBridge = NodeBridgeImpl(ajustes, ambito, hayVpnActiva = { hayVpnActiva(ctx) })
-    private var abierta: BilleteraAbierta? = null
+    override val nodo: NodeBridge = NodeBridgeImpl(
+        ajustes,
+        ambito,
+        hayVpnActiva = { hayVpnActiva(ctx) },
+        // Suelo de altura: la de la billetera abierta si es de la misma red; 0 si no la hay.
+        // No toma mutexRed, mutexBilletera ni mutexEnvio: lee `abierta` (@Volatile), compara una
+        // red inmutable y solo toma el mutex hoja de Billetera en Rust. Si la billetera se cierra
+        // justo mientras NodeBridge consulta el suelo, la llamada puede lanzar y la comprobación
+        // acaba en Caído (falla cerrado, dirección segura por decisión expresa).
+        alturaSuelo = { red -> abierta?.takeIf { it.red == red }?.motor?.altura() ?: 0u },
+    )
     private val mutexEnvio = Mutex()
     private val mutexBilletera = Mutex()
     /** Una operación de red a la vez: fijar la huella y usar la conexión son indivisibles. */
@@ -186,7 +196,12 @@ class WalletRepository(context: Context) : Repositorio {
     }
 
     override suspend fun estimarComision(bloques: UInt): Double = withContext(Dispatchers.IO) {
-        conRed { cm -> motor { estimarComision(ajustes.red, cm.url, bloques, cm.huella) } }
+        // Altura vista: la altura hasta la que la billetera abierta ya está sincronizada (persistida
+        // en estado.dat, así es suelo entre sesiones; el motor añade la marca máxima dentro de la
+        // sesión). Es la misma que usa el motor en sincronizar, escanear y difundir.
+        // No se pasa un 0 fijo: sale de estado.dat y solo es 0 antes de la primera sincronización.
+        val b = billetera()
+        conRed { cm -> motor { estimarComision(ajustes.red, cm.url, bloques, cm.huella, b.altura()) } }
     }
 
     /** Paso 1 de enviar: la revisión. Mientras se revisa, nadie más envía (mutex). */
@@ -264,7 +279,7 @@ class WalletRepository(context: Context) : Repositorio {
         is x39.wallet.Exception.Fondos -> "fondos insuficientes para el envío y la comisión"
         is x39.wallet.Exception.Direccion -> "dirección inválida o de otra red"
         is x39.wallet.Exception.RedServidor -> "ese servidor es de otra red: ${e.message}"
-        is x39.wallet.Exception.Red -> "sin respuesta del servidor: ${e.message}"
+        is x39.wallet.Exception.Red -> mensajeAlturaSiAplica(e.message) ?: "sin respuesta del servidor: ${e.message}"
         is x39.wallet.Exception.EnvioEnCurso -> "hay un envío sin resolver; reintenta o cancela antes"
         is x39.wallet.Exception.Revision -> "la revisión no coincide con lo que se iba a firmar: ${e.message}"
         is x39.wallet.Exception.Pendiente -> "la revisión caducó; prepara el envío otra vez"
