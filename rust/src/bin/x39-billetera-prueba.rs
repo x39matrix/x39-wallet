@@ -290,7 +290,7 @@ fn ejecutar(args: &[String]) -> Result<(), String> {
             } else {
                 b.sincronizar(&srv).map_err(e)?;
             }
-            println!("punta de la red: {}", altura_red(red, &srv).map_err(e)?);
+            println!("punta de la red: {}", altura_red(red, &srv, None).map_err(e)?);
             informe(&b);
         }
         "comision" => {
@@ -298,7 +298,7 @@ fn ejecutar(args: &[String]) -> Result<(), String> {
             let red = red_de(&dir)?;
             let srv = servidor_anunciado(red)?;
             let n: usize = pos.get(3).and_then(|x| x.parse().ok()).unwrap_or(2);
-            println!("{:.2} sat/vB para {n} bloques", estimar_comision(red, &srv, n).map_err(e)?);
+            println!("{:.2} sat/vB para {n} bloques", estimar_comision(red, &srv, n, None).map_err(e)?);
         }
         "enviar" => {
             let dir = dir.ok_or("falta <dir>")?;
@@ -370,7 +370,7 @@ fn ejecutar(args: &[String]) -> Result<(), String> {
             let tasa: f64 = match pos.get(4) {
                 Some(x) => x.parse().map_err(|_| "sat/vB inválido")?,
                 None => {
-                    let t = estimar_comision(red, &srv, 2).map_err(e)?.max(2.0);
+                    let t = estimar_comision(red, &srv, 2, None).map_err(e)?.max(2.0);
                     println!("tasa del reemplazo: {t:.2} sat/vB (estimación del servidor)");
                     t
                 }

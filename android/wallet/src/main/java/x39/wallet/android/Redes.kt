@@ -9,6 +9,9 @@ import x39.wallet.redesPermitidas
  * compilación). Las dos tienen que estar de acuerdo antes de abrir nada.
  */
 object Redes {
+    /** Servidor Electrum público de terceros para SIGNET (certificado reconocido, sin huella); solo se ofrece en esa red. */
+    const val SERVIDOR_PUBLICO_SIGNET = "ssl://mempool.space:60602"
+
     private val permitidas: Set<String> = BuildConfig.REDES_PERMITIDAS.split(',').map { it.trim() }.toSet()
 
     fun permitida(red: Red): Boolean = red.name.lowercase() in permitidas

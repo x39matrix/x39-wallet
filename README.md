@@ -39,6 +39,11 @@ a paso, límites conocidos). Lo que ya está decidido y probado se recoge en `PR
   aparato admitida, un cambio de biometría no invalida la clave; la invalidación que se
   detecta cubre la pérdida o el reinicio del almacén de claves, y se recupera con las 12
   palabras sin borrar el estado de la billetera. Opción futura: ajuste «solo biometría».
+- **Nodo propio con huella**: la conexión TLS al nodo del usuario fija la CLAVE PÚBLICA de su
+  certificado (huella SPKI, SHA-256 del `SubjectPublicKeyInfo`), no el certificado entero; con
+  huella no se valida CA, ni nombre, ni caducidad. La huella viaja en todas las operaciones de
+  red. Sin huella, `ssl://` se valida contra las raíces públicas (solo tiene sentido con un
+  servidor público de certificado reconocido).
 - **Una sola instancia por fichero**: el motor rechaza abrir dos veces el mismo fichero de
   estado en un proceso; el lado Android debe mantener una sola `Billetera` por fichero. La
   protección es por ruta canónica dentro del mismo proceso; no cubre otros procesos. En

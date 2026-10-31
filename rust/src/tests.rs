@@ -431,11 +431,11 @@ mod sin_mainnet {
         );
         // Se rechaza ANTES de intentar conectar con nadie.
         assert_eq!(
-            altura_red(Red::Mainnet, "tcp://sin-servidor:1").unwrap_err(),
+            altura_red(Red::Mainnet, "tcp://sin-servidor:1", None).unwrap_err(),
             Error::RedProhibida
         );
         assert_eq!(
-            estimar_comision(Red::Mainnet, "tcp://sin-servidor:1", 2).unwrap_err(),
+            estimar_comision(Red::Mainnet, "tcp://sin-servidor:1", 2, None).unwrap_err(),
             Error::RedProhibida
         );
         // Abrir un estado (de signet) como mainnet: prohibido también.
@@ -459,8 +459,11 @@ fn regtest_sincroniza_con_el_simulado() {
     assert_eq!(b.altura(), 1);
     assert_eq!(b.saldo().confirmado, FONDOS);
     assert_eq!(b.movimientos().len(), 1);
-    assert_eq!(altura_red(Red::Regtest, &sim.url).unwrap(), 1);
-    assert_eq!(estimar_comision(Red::Regtest, &sim.url, 2).unwrap(), 2.0);
+    assert_eq!(altura_red(Red::Regtest, &sim.url, None).unwrap(), 1);
+    assert_eq!(
+        estimar_comision(Red::Regtest, &sim.url, 2, None).unwrap(),
+        2.0
+    );
 }
 
 #[test]
@@ -525,15 +528,15 @@ fn servidor_de_otra_red_rechazado() {
         Error::RedServidor(_)
     ));
     assert!(matches!(
-        altura_red(Red::Regtest, &sim.url).unwrap_err(),
+        altura_red(Red::Regtest, &sim.url, None).unwrap_err(),
         Error::RedServidor(_)
     ));
     assert!(matches!(
-        estimar_comision(Red::Regtest, &sim.url, 2).unwrap_err(),
+        estimar_comision(Red::Regtest, &sim.url, 2, None).unwrap_err(),
         Error::RedServidor(_)
     ));
     // Pedido como signet, el mismo servidor vale.
-    assert_eq!(altura_red(Red::Signet, &sim.url).unwrap(), 1);
+    assert_eq!(altura_red(Red::Signet, &sim.url, None).unwrap(), 1);
     // Y una tx firmada no se intenta difundir a un servidor de otra red: estado intacto.
     let e = firmar_40k(&mut b);
     assert!(matches!(
@@ -1404,9 +1407,9 @@ fn signet_restaurar_encuentra_direcciones() {
 #[test]
 #[ignore]
 fn signet_altura_y_comision() {
-    let h = altura_red(Red::Signet, SIGNET).unwrap();
+    let h = altura_red(Red::Signet, SIGNET, None).unwrap();
     assert!(h > 300_000, "altura {h}");
-    let c = estimar_comision(Red::Signet, SIGNET, 2).unwrap();
+    let c = estimar_comision(Red::Signet, SIGNET, 2, None).unwrap();
     assert!((1.0..10_000.0).contains(&c), "comisión {c} sat/vB");
 }
 
@@ -1430,12 +1433,231 @@ fn sin_fallos_de_red<T>(mut f: impl FnMut() -> Result<T, Error>) -> Result<T, Er
 #[ignore]
 fn signet_servidor_publico_rechazado_si_se_pide_otra_red() {
     // El genesis_hash del servidor de signet no es el de testnet ni el de regtest.
-    let e = sin_fallos_de_red(|| altura_red(Red::Testnet, SIGNET)).unwrap_err();
+    let e = sin_fallos_de_red(|| altura_red(Red::Testnet, SIGNET, None)).unwrap_err();
     assert!(matches!(e, Error::RedServidor(_)), "{e}");
-    let e = sin_fallos_de_red(|| altura_red(Red::Regtest, SIGNET)).unwrap_err();
+    let e = sin_fallos_de_red(|| altura_red(Red::Regtest, SIGNET, None)).unwrap_err();
     assert!(matches!(e, Error::RedServidor(_)), "{e}");
     let dir = tempfile::tempdir().unwrap();
     let mut b = Billetera::crear(mn(), Red::Testnet, &dir.path().join("t.dat")).unwrap();
     let e = sin_fallos_de_red(|| b.sincronizar(SIGNET)).unwrap_err();
     assert!(matches!(e, Error::RedServidor(_)), "{e}");
+}
+
+// ----- NodeBridge: nodo del usuario con TLS y huella fijada (simulado) -----------------
+
+#[test]
+fn nodo_destino_se_analiza_bien() {
+    use crate::nodo::{Destino, Esquema};
+    let d = Destino::analizar("ssl://nodo.ejemplo.local:50002").unwrap();
+    assert_eq!(
+        (d.esquema, d.host.as_str(), d.puerto),
+        (Esquema::Ssl, "nodo.ejemplo.local", 50002)
+    );
+    let d = Destino::analizar("tcp://localhost:60401").unwrap();
+    assert_eq!((d.esquema, d.puerto), (Esquema::Tcp, 60401));
+    assert!(Destino::analizar("localhost:50002").is_err(), "sin esquema");
+    assert!(Destino::analizar("ssl://localhost").is_err(), "sin puerto");
+    assert!(Destino::analizar("ssl://:50002").is_err(), "sin host");
+}
+
+#[test]
+fn nodo_tls_con_huella_correcta_es_sano_y_la_billetera_sincroniza_por_el() {
+    let dir = tempfile::tempdir().unwrap();
+    let sim = Simulado::arrancar_tls(Network::Regtest);
+    let huella = sim.huella();
+    assert_eq!(huella.len(), 64);
+    let info = comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), 0).unwrap();
+    assert!(info.cifrado);
+    assert_eq!(info.huella_vista, huella);
+    assert_eq!(info.protocolo, "1.4");
+    assert_eq!(info.version_servidor, "simulado 0.1");
+    assert_eq!(info.altura, 0);
+    assert_eq!(info.red, Red::Regtest);
+    // La billetera entera por la conexión con huella: escaneo, saldo, difusión.
+    let mut b = billetera_regtest(dir.path(), &sim);
+    b.fijar_huella_servidor(Some(huella.to_uppercase()));
+    b.sincronizar(&sim.url).unwrap();
+    assert_eq!(b.saldo().confirmado, FONDOS);
+    let e = firmar_40k(&mut b);
+    assert_eq!(
+        b.difundir(&sim.url, &e.txid).unwrap().estado,
+        EstadoEnvio::Enviada
+    );
+    assert_eq!(sim.difundidas().len(), 1);
+    // Altura mínima: si el móvil ya vio más, el servidor va por detrás.
+    let err = comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), 5).unwrap_err();
+    assert!(
+        matches!(err, Error::Red(ref m) if m.contains("por detrás")),
+        "{err}"
+    );
+}
+
+#[test]
+fn nodo_tls_con_huella_incorrecta_se_rechaza_sin_tocar_nada() {
+    let dir = tempfile::tempdir().unwrap();
+    let sim = Simulado::arrancar_tls(Network::Regtest);
+    let mala = "00".repeat(32);
+    let err = comprobar_nodo(Red::Regtest, &sim.url, Some(&mala), 0).unwrap_err();
+    assert!(
+        matches!(err, Error::HuellaServidor(ref m) if m.contains("huella")),
+        "{err}"
+    );
+    // Mal formada.
+    assert!(matches!(
+        comprobar_nodo(Red::Regtest, &sim.url, Some("abc"), 0).unwrap_err(),
+        Error::HuellaServidor(_)
+    ));
+    // Con tcp:// la huella no tiene sentido: se rechaza en vez de ignorarla.
+    let plano = Simulado::arrancar(Network::Regtest);
+    assert!(matches!(
+        comprobar_nodo(Red::Regtest, &plano.url, Some(&sim.huella()), 0).unwrap_err(),
+        Error::HuellaServidor(_)
+    ));
+    // La billetera con la huella mala no sincroniza ni difunde, y el intento no cuenta.
+    let mut b = billetera_regtest(dir.path(), &sim);
+    b.fijar_huella_servidor(Some(mala.clone()));
+    assert!(matches!(
+        b.sincronizar(&sim.url).unwrap_err(),
+        Error::HuellaServidor(_)
+    ));
+    let e = firmar_40k(&mut b);
+    assert!(matches!(
+        b.difundir(&sim.url, &e.txid).unwrap_err(),
+        Error::HuellaServidor(_)
+    ));
+    let e = b.estado_envio(&e.txid).unwrap();
+    assert_eq!((e.estado, e.intentos_difusion), (EstadoEnvio::Firmada, 0));
+    assert!(sim.difundidas().is_empty());
+    // Con la buena, todo sigue.
+    b.fijar_huella_servidor(Some(sim.huella()));
+    assert_eq!(
+        b.difundir(&sim.url, &e.txid).unwrap().estado,
+        EstadoEnvio::Enviada
+    );
+}
+
+#[test]
+fn nodo_tls_de_otra_red_se_rechaza() {
+    let sim = Simulado::arrancar_tls(Network::Signet);
+    let err = comprobar_nodo(Red::Regtest, &sim.url, Some(&sim.huella()), 0).unwrap_err();
+    assert!(matches!(err, Error::RedServidor(_)), "{err}");
+    assert!(comprobar_nodo(Red::Signet, &sim.url, Some(&sim.huella()), 0).is_ok());
+}
+
+#[test]
+fn nodo_tcp_sin_cifrar_se_informa_y_corte_y_vuelta() {
+    let sim = Simulado::arrancar(Network::Regtest);
+    let info = comprobar_nodo(Red::Regtest, &sim.url, None, 0).unwrap();
+    assert!(
+        !info.cifrado,
+        "tcp:// se informa como sin cifrar (la capa de arriba avisa)"
+    );
+    assert!(info.huella_vista.is_empty());
+    // Corte: el servidor deja de aceptar conexiones → error de red, nada más.
+    sim.parar();
+    let err = comprobar_nodo(Red::Regtest, &sim.url, None, 0).unwrap_err();
+    assert!(matches!(err, Error::Red(_)), "{err}");
+    // Vuelta: un servidor de nuevo en pie (en las pruebas, en otro puerto) → sano.
+    let otro = Simulado::arrancar(Network::Regtest);
+    assert!(comprobar_nodo(Red::Regtest, &otro.url, None, 0).is_ok());
+}
+
+/// Vector fijo: certificado de prueba y la huella SPKI (SHA-256 del SubjectPublicKeyInfo DER)
+/// calculada con openssl aparte: `openssl x509 -pubkey -noout | openssl pkey -pubin -outform DER | sha256sum`.
+/// El cálculo del motor y el de la herramienta del nodo (E-2) tienen que coincidir siempre.
+const VECTOR_CERT_PEM: &str = "-----BEGIN CERTIFICATE-----
+MIIBjTCCATOgAwIBAgIUNsBCrU//8e0opMTKj0YivaIJCFkwCgYIKoZIzj0EAwIw
+GzEZMBcGA1UEAwwQdmVjdG9yLWRlLXBydWViYTAgFw0yNjEwMzEwMTIyMTVaGA8y
+MTI2MTAwNzAxMjIxNVowGzEZMBcGA1UEAwwQdmVjdG9yLWRlLXBydWViYTBZMBMG
+ByqGSM49AgEGCCqGSM49AwEHA0IABEyv/2EInqxlGpKoRM6I7SR3jYVpOiiDwF/o
+HVK40PP9Te2zyB2SGEZ5dmDhtYjCQunIQRJht5I+pqEKs9P8pk+jUzBRMB0GA1Ud
+DgQWBBSM3TTwAFvxbQamEKLcr4+8TeEL+zAfBgNVHSMEGDAWgBSM3TTwAFvxbQam
+EKLcr4+8TeEL+zAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0gAMEUCIA0o
+g8G6Votz6jSXiZLuEB7uD6M+TB7Ze07pOJ4xyCxhAiEA5TpSEl+oTddrbSinB53w
+dMoDA2hI7Ikz9ojHLFIAnpY=
+-----END CERTIFICATE-----
+";
+const VECTOR_HUELLA_SPKI: &str = "d69cfd0cee1cb723598e98e240ec62f14cc0ef834f47872dd6c29d4da6e230de";
+
+#[test]
+fn huella_spki_vector_fijo() {
+    use bitcoin::hex::DisplayHex;
+    use rustls::pki_types::pem::PemObject;
+    let cert =
+        rustls::pki_types::CertificateDer::from_pem_slice(VECTOR_CERT_PEM.as_bytes()).unwrap();
+    let h = crate::nodo::huella_spki(&cert)
+        .unwrap()
+        .to_lower_hex_string();
+    assert_eq!(h, VECTOR_HUELLA_SPKI);
+}
+
+#[test]
+fn nodo_la_huella_viaja_en_altura_y_comision() {
+    let sim = Simulado::arrancar_tls(Network::Regtest);
+    let buena = sim.huella();
+    let mala = "11".repeat(32);
+    // Con la huella buena, las dos funciones libres funcionan por TLS con huella.
+    assert_eq!(altura_red(Red::Regtest, &sim.url, Some(&buena)).unwrap(), 0);
+    assert_eq!(
+        estimar_comision(Red::Regtest, &sim.url, 2, Some(&buena)).unwrap(),
+        2.0
+    );
+    // Con huella mala, se niegan (no caen a «aceptar cualquier certificado»).
+    assert!(matches!(
+        altura_red(Red::Regtest, &sim.url, Some(&mala)).unwrap_err(),
+        Error::HuellaServidor(_)
+    ));
+    assert!(matches!(
+        estimar_comision(Red::Regtest, &sim.url, 2, Some(&mala)).unwrap_err(),
+        Error::HuellaServidor(_)
+    ));
+    // Sin huella, un certificado autofirmado no pasa la validación por raíces públicas.
+    assert!(matches!(
+        altura_red(Red::Regtest, &sim.url, None).unwrap_err(),
+        Error::Red(_)
+    ));
+}
+
+#[test]
+fn nodo_corte_tras_validar_genesis_y_otra_red_al_volver() {
+    use crate::nodo::Conexion;
+    let sim = Simulado::arrancar(Network::Regtest);
+    let puerto = sim.puerto();
+    let url = sim.url.clone();
+    let c = Conexion::abrir(&url, Network::Regtest, None, Duration::from_secs(2)).unwrap();
+    assert_eq!(c.altura().unwrap(), 0);
+    // Corte del servidor; en la misma dirección aparece un servidor de OTRA red.
+    sim.parar();
+    let otro = Simulado::arrancar_en(puerto, Network::Signet);
+    // La conexión antigua NO reintenta por su cuenta (retry 0): falla, no devuelve datos del impostor.
+    assert!(
+        matches!(c.altura(), Err(Error::Red(_))),
+        "sin reintento interno"
+    );
+    // Un reintento de la capa de arriba repite toda la validación y descubre la red equivocada.
+    assert!(matches!(
+        Conexion::abrir(&url, Network::Regtest, None, Duration::from_secs(2)),
+        Err(Error::RedServidor(_))
+    ));
+    assert!(matches!(
+        comprobar_nodo(Red::Regtest, &url, None, 0).unwrap_err(),
+        Error::RedServidor(_)
+    ));
+    // Pedido como signet, el nuevo sí vale.
+    assert_eq!(altura_red(Red::Signet, &otro.url, None).unwrap(), 0);
+}
+
+#[test]
+#[ignore]
+fn signet_publico_con_huella_equivocada_se_rechaza_tambien_en_comision() {
+    // Certificado público válido pero huella fijada distinta: la huella manda, no la CA.
+    let mala = "22".repeat(32);
+    assert!(matches!(
+        estimar_comision(Red::Signet, SIGNET, 2, Some(&mala)).unwrap_err(),
+        Error::HuellaServidor(_)
+    ));
+    assert!(matches!(
+        altura_red(Red::Signet, SIGNET, Some(&mala)).unwrap_err(),
+        Error::HuellaServidor(_)
+    ));
 }

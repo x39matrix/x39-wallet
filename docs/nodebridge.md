@@ -28,7 +28,7 @@ el nodo está en casa detrás de un router, un túnel WireGuard estándar hasta 
 | Punto de acceso Electrum | `esquema://host:puerto`, con `ssl://` (TLS) o `tcp://` (sin cifrar; solo dentro del túnel o la red local). |
 | Túnel propio | Perfil WireGuard que NodeBridge compone con la clave privada que GENERA EL MÓVIL (nunca viaja) y los datos del nodo que llegan en el paquete de emparejamiento. |
 | Túnel externo | Una VPN ya activa en el aparato (por ejemplo la de la app de comunicaciones) a través de la cual el nodo es alcanzable; NodeBridge no la toca. |
-| Huella del servidor | Hash SHA-256 de la clave pública (SPKI) del certificado TLS del servidor Electrum. |
+| Huella del servidor | SHA-256 del `SubjectPublicKeyInfo` (la CLAVE PÚBLICA, no el certificado entero) del certificado TLS del servidor Electrum. Con huella fijada no se valida CA, ni nombre, ni caducidad: la huella sustituye a la CA. Vector fijo de prueba en `rust/src/tests.rs`. |
 | Emparejamiento | Acto por el que un móvil queda autorizado a hablar con un nodo: recibe su punto de acceso, su huella y, si procede, su perfil de túnel. |
 | Revocación | Acto por el que el nodo deja de aceptar a ese móvil, y el móvil olvida al nodo. |
 
@@ -70,16 +70,21 @@ interface NodeBridge {
     suspend fun configurar(config: ConfigNodo)          // guarda y reconecta
     suspend fun olvidar()                                 // borra configuración y túnel (revocación local)
     suspend fun comprobar(): EstadoNodo                   // conexión única, sin vigilancia
+    suspend fun probar(config: ConfigNodo): EstadoNodo    // mismas reglas, sin guardar ni publicar
     fun vigilar(activo: Boolean)                          // vigilancia con reconexión creciente
-    suspend fun importarEmparejamiento(texto: String): ConfigNodo  // QR o fichero; valida y devuelve
-    fun clavePublicaDelMovil(): String                    // para mostrarla (QR) al nodo; la privada nunca sale
-    fun urlParaElMotor(): String?                         // lo que la billetera pasa al crate
+    suspend fun importarEmparejamiento(texto: String): ConfigNodo  // QR o fichero; valida y devuelve (E-2)
+    fun clavePublicaDelMovil(): String                    // para mostrarla (QR) al nodo; la privada nunca sale (E-2)
+    suspend fun conexionSana(): ConexionMotor?            // URL + huella de la MISMA generación, solo si Sano
 }
 ```
 
 Reglas de la interfaz:
 
 - `configurar` no da el nodo por bueno hasta que `comprobar` devuelve `Sano`.
+- Cada `configurar`/`olvidar` abre una **generación** de configuración; un resultado que llega
+  de una generación anterior se descarta sin publicarse. `conexionSana` entrega URL y huella de
+  la misma generación, y la billetera fija la huella en el motor y ejecuta la operación bajo un
+  mutex, para que nada cambie la huella entre medias.
 - Toda la red en `Dispatchers.IO`; el `StateFlow` se actualiza en cada intento.
 - Reconexión con espera creciente: 2 s, 4 s, 8 s… hasta un máximo de 5 min, con un poco de
   azar para no sincronizarse con otros clientes; se reinicia a 2 s tras un éxito.
@@ -94,8 +99,11 @@ Reglas de la interfaz:
 1. **Red correcta**: `server.features.genesis_hash` debe ser el génesis de `config.red`. Si no,
    `RedIncorrecta` y no se hace nada más (ya implementado en el motor: `Error::RedServidor`).
 2. **Identidad del servidor** (con `ssl://`): la huella SPKI del certificado presentado debe
-   ser `huellaServidor`. Sin huella no se acepta `ssl://` salvo el servidor público de signet.
-   `tcp://` se acepta solo con aviso visible («sin cifrar: solo por tu túnel o tu red local»).
+   ser `huellaServidor`; se comprueba dentro del apretón de manos TLS, en TODAS las operaciones
+   (escaneo, sincronización, difusión, altura, comisión). Con huella no se valida CA, ni nombre,
+   ni caducidad. Sin huella no se acepta `ssl://` salvo el servidor público de signet (regla de la
+   capa Kotlin; el motor valida entonces contra las raíces públicas). `tcp://` se acepta solo
+   con aviso visible («sin cifrar: solo por tu túnel o tu red local»).
 3. **Altura razonable**: la punta del servidor no puede ir por detrás de la última altura vista
    por el móvil; si va por detrás, el nodo está resincronizando y el estado lo dice.
 4. **Versión de protocolo**: `server.version` con protocolo 1.4; si el servidor no lo admite, error
@@ -177,7 +185,7 @@ clave privada del túnel.
 | Modo | Qué hace NodeBridge |
 |---|---|
 | (a) **Túnel propio** (`PROPIO`) | Levanta su propio perfil WireGuard con la clave privada generada en el móvil y los datos del paquete. Solo si NO hay otra VPN activa en el aparato; si la hay, no lo levanta y lo dice (`Caido` con motivo «hay otra VPN activa»). |
-| (b) **Túnel externo** (`EXTERNO`) | No toca ninguna VPN. Comprueba que el nodo es alcanzable y sano A TRAVÉS del túnel que ya está activo (el de la app de comunicaciones u otro). Si ese túnel cae, el nodo deja de ser alcanzable y el estado lo refleja. |
+| (b) **Túnel externo** (`EXTERNO`) | No toca ninguna VPN. EXIGE que haya una VPN activa en el aparato y comprueba que el nodo responde. Detectar una VPN activa NO demuestra que el tráfico hacia ESE nodo viaje por ella (Android permite rutas por destino): salvo que se verifique el encaminamiento, el texto al usuario no debe afirmarlo. Si la VPN cae, el estado pasa a caído. |
 | Ninguno (`NINGUNO`) | El nodo es alcanzable directamente (red local, nodo con TLS público…). |
 
 La app elige el modo; NodeBridge nunca levanta un túnel si hay otro activo, y cuando no

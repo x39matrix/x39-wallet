@@ -27,6 +27,7 @@ class ErrorBilletera(mensaje: String, causa: Throwable? = null) : Exception(mens
 interface Repositorio {
     val ajustes: Ajustes
     val almacen: AlmacenSemilla
+    val nodo: NodeBridge
     val vista: StateFlow<WalletRepository.Vista>
     fun estado(): WalletRepository.Estado
     fun escaneoPendiente(): Boolean
@@ -62,9 +63,14 @@ class WalletRepository(context: Context) : Repositorio {
     private val fichero = File(File(ctx.noBackupFilesDir, "x39-wallet"), "estado.dat")
     /** Marca persistida: restaurada sin escanear; sobrevive al cierre del proceso. */
     private val marcaEscaneo = File(fichero.path + ".escaneo-pendiente")
+    private val ambito = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
+    /** El nodo del usuario: la billetera no sincroniza ni difunde si no está sano. */
+    override val nodo: NodeBridge = NodeBridgeImpl(ajustes, ambito, hayVpnActiva = { hayVpnActiva(ctx) })
     private var abierta: BilleteraAbierta? = null
     private val mutexEnvio = Mutex()
     private val mutexBilletera = Mutex()
+    /** Una operación de red a la vez: fijar la huella y usar la conexión son indivisibles. */
+    private val mutexRed = Mutex()
 
     data class Vista(
         val saldo: Saldo? = null,
@@ -119,9 +125,13 @@ class WalletRepository(context: Context) : Repositorio {
                 // reabrir sigue pendiente.
                 marcaEscaneo.writeText("restaurada; escaneo completo pendiente\n")
                 if (ajustes.hayServidor()) {
-                    motor { abierta!!.motor.escanear(ajustes.urlServidor()) }
-                    marcaEscaneo.delete()
-                    escaneada = true
+                    try {
+                        conRed { cm -> motor { abierta!!.motor.escanear(cm.url) } }
+                        marcaEscaneo.delete()
+                        escaneada = true
+                    } catch (_: ErrorBilletera) {
+                        // sin nodo sano: queda pendiente
+                    }
                 }
             }
         }
@@ -160,10 +170,9 @@ class WalletRepository(context: Context) : Repositorio {
     override suspend fun sincronizar(completo: Boolean) = withContext(Dispatchers.IO) {
         _vista.value = _vista.value.copy(sincronizando = true, ultimoError = null)
         try {
-            val srv = servidorOError()
             val b = billetera()
             val pendiente = marcaEscaneo.exists()
-            motor { if (completo || pendiente) b.escanear(srv) else b.sincronizar(srv) }
+            conRed { cm -> motor { if (completo || pendiente) b.escanear(cm.url) else b.sincronizar(cm.url) } }
             if (pendiente) marcaEscaneo.delete()
             refrescarLocal()
         } catch (e: Exception) {
@@ -177,7 +186,7 @@ class WalletRepository(context: Context) : Repositorio {
     }
 
     override suspend fun estimarComision(bloques: UInt): Double = withContext(Dispatchers.IO) {
-        motor { estimarComision(ajustes.red, servidorOError(), bloques) }
+        conRed { cm -> motor { estimarComision(ajustes.red, cm.url, bloques, cm.huella) } }
     }
 
     /** Paso 1 de enviar: la revisión. Mientras se revisa, nadie más envía (mutex). */
@@ -198,7 +207,7 @@ class WalletRepository(context: Context) : Repositorio {
 
     /** Difunde o reintenta LA MISMA transacción. */
     override suspend fun difundir(txid: String): EnvioInfo = withContext(Dispatchers.IO) {
-        mutexEnvio.withLock { motor { billetera().difundir(servidorOError(), txid) } }.also { refrescarLocal() }
+        mutexEnvio.withLock { conRed { cm -> motor { billetera().difundir(cm.url, txid) } } }.also { refrescarLocal() }
     }
 
     /** Cancela liberando monedas (solo firmada y nunca difundida). */
@@ -210,11 +219,28 @@ class WalletRepository(context: Context) : Repositorio {
 
     private fun billetera() = abierta?.motor ?: throw ErrorBilletera("la billetera no está abierta")
 
-    private fun servidorOError(): String {
-        val s = ajustes.urlServidor()
-        if (s.isEmpty()) throw ErrorBilletera("no hay servidor Electrum configurado: ponlo en Ajustes")
-        return s
+    /**
+     * Toda operación de red pasa por aquí: comprueba el nodo AHORA (huella/TLS, génesis,
+     * protocolo, altura) y, solo si está sano, entrega URL y huella de la MISMA generación de
+     * configuración; fija la huella en el motor y ejecuta la operación bajo un mutex, de modo
+     * que ninguna otra operación pueda cambiar la huella entre medias.
+     */
+    private suspend fun <T> conRed(f: (ConexionMotor) -> T): T = mutexRed.withLock {
+        if (ajustes.urlServidor().isEmpty()) throw ErrorBilletera("no hay servidor Electrum configurado: ponlo en Ajustes")
+        val cm = nodo.conexionSana() ?: throw ErrorBilletera("el nodo no está disponible: ${describir(nodo.estado.value)}")
+        abierta?.motor?.fijarHuellaServidor(cm.huella)
+        f(cm)
     }
+
+    private fun describir(e: EstadoNodo): String = when (e) {
+        is EstadoNodo.SinConfigurar -> "sin configurar"
+        is EstadoNodo.Conectando -> "conectando"
+        is EstadoNodo.Sano -> "sano"
+        is EstadoNodo.Caido -> e.ultimoError
+        is EstadoNodo.RedIncorrecta -> "es de otra red: ${e.detalle}"
+        is EstadoNodo.HuellaIncorrecta -> "la huella del certificado no es la esperada: ${e.detalle}"
+    }
+
 
     private suspend fun refrescar() = withContext(Dispatchers.IO) { refrescarLocal() }
 
@@ -270,6 +296,13 @@ class WalletRepository(context: Context) : Repositorio {
         /** Solo pruebas: sustituye el repositorio que ven las pantallas. */
         fun fijarParaPruebas(r: Repositorio?) {
             paraPruebas = r
+        }
+
+        /** ¿Hay una VPN activa en el aparato? (`TRANSPORT_VPN` en alguna red). */
+        fun hayVpnActiva(ctx: Context): Boolean {
+            val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return false
+            val red = cm.activeNetwork ?: return false
+            return cm.getNetworkCapabilities(red)?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) == true
         }
 
         fun EstadoEnvio.texto(): String = when (this) {

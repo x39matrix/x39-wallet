@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <!-- Servidor Electrum del usuario. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- NodeBridge: saber si hay una VPN activa (modo de túnel externo). -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Las reglas de copia de seguridad (res/xml) las referencia la APP en su <application>:
          android:fullBackupContent="@xml/x39_wallet_backup_rules"
          android:dataExtractionRules="@xml/x39_wallet_data_extraction_rules"

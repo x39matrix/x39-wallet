@@ -124,3 +124,20 @@ paquete de pruebas (`x39.wallet.test`) y un alias de clave propio que borran al 
 El módulo declara minSdk 21 (como la app), pero la semilla cifrada con autenticación por
 operación exige las API del Keystore de Android 6 (API 23): en un aparato anterior la
 billetera se niega a arrancar con un mensaje claro (`Redes.exigirAndroid()`).
+
+## NodeBridge (fase E-1)
+
+`NodeBridge.kt`: `ConfigNodo` (red, `ssl://`/`tcp://host:puerto`, huella SPKI obligatoria con
+`ssl://` salvo el servidor público de signet, modo de túnel, nombre), `EstadoNodo`
+(`SinConfigurar`, `Conectando`, `Sano`, `Caido`, `RedIncorrecta`, `HuellaIncorrecta`) y
+`NodeBridgeImpl`: comprobaciones en orden por el motor (`comprobarNodo`: huella SPKI DENTRO
+del apretón de manos TLS, génesis, protocolo 1.4 y latencia, altura no inferior a la última
+vista), reconexión con espera creciente (2 s → 5 min, hasta un 20 % de azar; 60 s cuando está
+sano) y modo de túnel EXTERNO (exige una VPN activa; detectarla no demuestra que el tráfico
+hacia ese nodo vaya por ella, porque Android permite rutas por destino; nunca levanta un túnel).
+La huella fija la CLAVE PÚBLICA (SPKI), no el certificado entero, y con huella no se valida CA,
+ni nombre, ni caducidad. Toda operación de red de la billetera pasa por `conexionSana()`:
+comprueba el nodo ahora y, solo si está sano, entrega URL y huella de la MISMA generación de
+configuración; fijar la huella en el motor y usar la conexión van bajo un mutex, y la huella
+viaja en todas las operaciones (también estimar comisión y altura). El túnel propio (E-3) está
+definido en `docs/nodebridge.md` y no implementado.

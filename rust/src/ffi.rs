@@ -25,7 +25,7 @@ use crate as motor;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-pub use motor::{EnvioInfo, Error, EstadoEnvio, Movimiento, PsbtPendiente, Red, Saldo};
+pub use motor::{EnvioInfo, Error, EstadoEnvio, Movimiento, NodoInfo, PsbtPendiente, Red, Saldo};
 
 /// Una dirección de recibir recién revelada y su índice de derivación.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -57,16 +57,39 @@ pub fn redes_permitidas() -> String {
     motor::REDES_PERMITIDAS.to_string()
 }
 
-/// Altura del servidor Electrum, verificando que es de la red indicada.
+fn huella_opt(h: &Option<String>) -> Option<&str> {
+    h.as_deref().map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// Altura del servidor Electrum, verificando que es de la red indicada. `huella_spki`: la
+/// misma huella que en el resto de operaciones (obligatoria con nodo autofirmado).
 #[uniffi::export]
-pub fn altura_red(red: Red, servidor: String) -> Result<u32, Error> {
-    motor::altura_red(red, &servidor)
+pub fn altura_red(red: Red, servidor: String, huella_spki: Option<String>) -> Result<u32, Error> {
+    motor::altura_red(red, &servidor, huella_opt(&huella_spki))
 }
 
 /// Comisión recomendada en sat/vB para confirmar en `bloques` bloques.
 #[uniffi::export]
-pub fn estimar_comision(red: Red, servidor: String, bloques: u32) -> Result<f64, Error> {
-    motor::estimar_comision(red, &servidor, bloques as usize)
+pub fn estimar_comision(
+    red: Red,
+    servidor: String,
+    bloques: u32,
+    huella_spki: Option<String>,
+) -> Result<f64, Error> {
+    motor::estimar_comision(red, &servidor, bloques as usize, huella_opt(&huella_spki))
+}
+
+/// Comprobación completa del nodo del usuario (NodeBridge), en este orden: red por génesis,
+/// identidad por huella SPKI (con `ssl://` y huella), altura no inferior a `altura_minima`,
+/// protocolo 1.4 y latencia. No sincroniza ni difunde nada.
+#[uniffi::export]
+pub fn comprobar_nodo(
+    red: Red,
+    servidor: String,
+    huella_spki: Option<String>,
+    altura_minima: u32,
+) -> Result<NodoInfo, Error> {
+    motor::comprobar_nodo(red, &servidor, huella_opt(&huella_spki), altura_minima)
 }
 
 /// La billetera. Las llamadas se serializan con un mutex: una operación a la vez.
@@ -112,6 +135,11 @@ impl Billetera {
     /// Espera máxima por respuesta del servidor, en segundos.
     pub fn fijar_espera_s(&self, segundos: u64) {
         self.con(|b| b.fijar_espera(Duration::from_secs(segundos.max(1))))
+    }
+
+    /// Huella SPKI (hex) del certificado del servidor con `ssl://`; `null` = sin fijar.
+    pub fn fijar_huella_servidor(&self, huella_spki: Option<String>) {
+        self.con(|b| b.fijar_huella_servidor(huella_spki))
     }
 
     pub fn nueva_direccion(&self) -> Result<DireccionInfo, Error> {

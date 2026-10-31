@@ -48,6 +48,12 @@ class BilleteraActivity : BaseActivity() {
         setContentView(Estilo.envolver(this, col))
 
         lifecycleScope.launch { repo.vista.collect { pintar(it) } }
+        lifecycleScope.launch { repo.nodo.estado.collect { pintar(repo.vista.value) } }
+    }
+
+    override fun onPause() {
+        repo.nodo.vigilar(false)
+        super.onPause()
     }
 
     override fun onResume() {
@@ -60,7 +66,10 @@ class BilleteraActivity : BaseActivity() {
         }
         lanzar {
             repo.abrir() // reanuda desde lo persistido (envíos firmados o inciertos)
-            if (repo.ajustes.hayServidor()) try { repo.sincronizar() } catch (_: Exception) {}
+            if (repo.ajustes.hayServidor()) {
+                repo.nodo.vigilar(true) // reconexión con espera creciente mientras la pantalla esté delante
+                try { repo.sincronizar() } catch (_: Exception) {}
+            }
         }
     }
 
@@ -69,8 +78,16 @@ class BilleteraActivity : BaseActivity() {
         saldo.text = if (s == null) "—" else Estilo.sat(s.total)
         detalle.text = if (s == null) "" else "confirmado ${Estilo.sat(s.confirmado)} · pendiente ${Estilo.sat(s.pendiente)}"
         redTxt.text = buildString {
-            append(if (repo.ajustes.hayServidor()) "servidor: ${repo.ajustes.servidor}" else "sin servidor Electrum: configúralo en Ajustes")
+            append(if (repo.ajustes.hayServidor()) "nodo: ${repo.ajustes.servidor}" else "sin nodo: configúralo en Ajustes")
             if (repo.ajustes.servidorSinCifrar()) append("  ⚠ tcp:// sin cifrar")
+            when (val n = repo.nodo.estado.value) {
+                is EstadoNodo.Sano -> append("\nnodo sano · altura ${n.info.altura} · ${n.info.latenciaMs} ms" + if (n.info.huellaVista.isNotEmpty()) " · huella comprobada" else "")
+                is EstadoNodo.Caido -> append("\n⚠ nodo caído: ${n.ultimoError}" + if (n.proximoIntentoEnS > 0) " · reintento en ${n.proximoIntentoEnS} s" else "")
+                is EstadoNodo.RedIncorrecta -> append("\n⚠ el nodo es de otra red: ${n.detalle}")
+                is EstadoNodo.HuellaIncorrecta -> append("\n⚠ huella del certificado incorrecta: no se habla con ese servidor")
+                is EstadoNodo.Conectando -> append("\nnodo: conectando…")
+                is EstadoNodo.SinConfigurar -> {}
+            }
             append("\naltura ${v.altura}")
             if (v.sincronizando) append(" · sincronizando…")
             if (v.escaneoPendiente) append("\n⚠ Restaurada sin escaneo completo: no se puede enviar hasta sincronizar con tu servidor")

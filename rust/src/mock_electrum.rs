@@ -12,9 +12,10 @@ use bitcoin::hex::DisplayHex;
 use bitcoin::{consensus, Network, ScriptBuf, Transaction, TxMerkleNode, Txid};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -40,12 +41,18 @@ pub struct Estado {
     pub difundidas: Vec<Txid>,
     /// Copias de ficheros leídas con `Difusion::LeerAlRecibir`.
     pub capturas: Vec<String>,
+    /// Conexiones abiertas (para cortarlas al parar).
+    pub abiertas: Vec<TcpStream>,
 }
 
 pub struct Simulado {
-    /// `tcp://<local>:<puerto>`, para pasar como servidor.
+    /// `tcp://<local>:<puerto>` (o `ssl://localhost:<puerto>` en modo TLS), para pasar como servidor.
     pub url: String,
     pub estado: Arc<Mutex<Estado>>,
+    parar: Arc<AtomicBool>,
+    puerto: u16,
+    /// Certificado DER del servidor en modo TLS.
+    pub cert_der: Option<Vec<u8>>,
 }
 
 pub fn scripthash(spk: &ScriptBuf) -> String {
@@ -55,20 +62,40 @@ pub fn scripthash(spk: &ScriptBuf) -> String {
 }
 
 impl Simulado {
-    pub fn arrancar(red: Network) -> Simulado {
-        let escucha = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("puerto local");
-        let puerto = escucha.local_addr().unwrap().port();
-        let estado = Arc::new(Mutex::new(Estado {
+    fn estado_inicial(red: Network) -> Arc<Mutex<Estado>> {
+        Arc::new(Mutex::new(Estado {
             cabeceras: vec![genesis_block(red).header],
             txs: HashMap::new(),
             historia: HashMap::new(),
             difusion: Difusion::Aceptar,
             difundidas: Vec::new(),
             capturas: Vec::new(),
-        }));
-        let e2 = estado.clone();
+            abiertas: Vec::new(),
+        }))
+    }
+
+    /// Servidor sin cifrar (`tcp://`) en un puerto libre.
+    pub fn arrancar(red: Network) -> Simulado {
+        Self::arrancar_en(0, red)
+    }
+
+    /// Servidor sin cifrar en un puerto concreto (0 = libre): permite «volver» en la misma
+    /// dirección, incluso con otra red (para probar que se vuelve a comprobar el génesis).
+    pub fn arrancar_en(puerto_pedido: u16, red: Network) -> Simulado {
+        let escucha =
+            TcpListener::bind((Ipv4Addr::LOCALHOST, puerto_pedido)).expect("puerto local");
+        let puerto = escucha.local_addr().unwrap().port();
+        let estado = Self::estado_inicial(red);
+        let parar = Arc::new(AtomicBool::new(false));
+        let (e2, p2) = (estado.clone(), parar.clone());
         std::thread::spawn(move || {
             for s in escucha.incoming().flatten() {
+                if p2.load(Ordering::SeqCst) {
+                    break;
+                }
+                if let Ok(copia) = s.try_clone() {
+                    e2.lock().unwrap().abiertas.push(copia);
+                }
                 let e = e2.clone();
                 std::thread::spawn(move || atender(s, e));
             }
@@ -76,7 +103,108 @@ impl Simulado {
         Simulado {
             url: format!("tcp://{}:{puerto}", Ipv4Addr::LOCALHOST),
             estado,
+            parar,
+            puerto,
+            cert_der: None,
         }
+    }
+
+    /// Servidor TLS (`ssl://localhost:puerto`) con un certificado autofirmado efímero
+    /// generado con el `openssl` de la máquina (nombre `localhost`).
+    pub fn arrancar_tls(red: Network) -> Simulado {
+        use rustls::pki_types::pem::PemObject;
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+        let dir = tempfile::tempdir().expect("dir temporal");
+        let (clave, cert) = (dir.path().join("clave.pem"), dir.path().join("cert.pem"));
+        let salida = std::process::Command::new("openssl")
+            .args([
+                "req",
+                "-x509",
+                "-newkey",
+                "ec",
+                "-pkeyopt",
+                "ec_paramgen_curve:prime256v1",
+                "-nodes",
+                "-days",
+                "2",
+            ])
+            .args([
+                "-subj",
+                "/CN=localhost",
+                "-addext",
+                "subjectAltName=DNS:localhost",
+            ])
+            .arg("-keyout")
+            .arg(&clave)
+            .arg("-out")
+            .arg(&cert)
+            .output()
+            .expect("openssl disponible");
+        assert!(
+            salida.status.success(),
+            "openssl: {}",
+            String::from_utf8_lossy(&salida.stderr)
+        );
+        let cert_der = CertificateDer::from_pem_file(&cert).expect("cert pem");
+        let clave_der = PrivateKeyDer::from_pem_file(&clave).expect("clave pem");
+        crate::nodo::instalar_proveedor_pruebas();
+        let config = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert_der.clone()], clave_der)
+            .expect("config tls");
+        let config = Arc::new(config);
+        let escucha = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("puerto local");
+        let puerto = escucha.local_addr().unwrap().port();
+        let estado = Self::estado_inicial(red);
+        let parar = Arc::new(AtomicBool::new(false));
+        let (e2, p2) = (estado.clone(), parar.clone());
+        std::thread::spawn(move || {
+            for s in escucha.incoming().flatten() {
+                if p2.load(Ordering::SeqCst) {
+                    break;
+                }
+                let e = e2.clone();
+                let cfg = config.clone();
+                std::thread::spawn(move || {
+                    let Ok(conn) = rustls::ServerConnection::new(cfg) else {
+                        return;
+                    };
+                    let flujo = rustls::StreamOwned::new(conn, s);
+                    atender(flujo, e);
+                });
+            }
+        });
+        Simulado {
+            url: format!("ssl://localhost:{puerto}"),
+            estado,
+            parar,
+            puerto,
+            cert_der: Some(cert_der.to_vec()),
+        }
+    }
+
+    /// Huella SPKI (SHA-256, hex) del certificado del servidor TLS.
+    pub fn huella(&self) -> String {
+        use bitcoin::hex::DisplayHex;
+        let der = rustls::pki_types::CertificateDer::from(self.cert_der.clone().expect("modo TLS"));
+        crate::nodo::huella_spki(&der)
+            .expect("spki")
+            .to_lower_hex_string()
+    }
+
+    /// Corte del servidor: deja de aceptar conexiones y corta las abiertas.
+    pub fn parar(&self) {
+        self.parar.store(true, Ordering::SeqCst);
+        for s in self.estado.lock().unwrap().abiertas.drain(..) {
+            let _ = s.shutdown(std::net::Shutdown::Both);
+        }
+        // Una conexión vacía para desbloquear el accept y que el hilo salga y cierre el puerto.
+        let _ = TcpStream::connect((Ipv4Addr::LOCALHOST, self.puerto));
+        std::thread::sleep(Duration::from_millis(150));
+    }
+
+    pub fn puerto(&self) -> u16 {
+        self.puerto
     }
 
     pub fn fijar_difusion(&self, d: Difusion) {
@@ -148,9 +276,8 @@ fn registrar(e: &mut Estado, tx: &Transaction, altura: i64) {
     e.txs.insert(txid, tx.clone());
 }
 
-fn atender(s: TcpStream, estado: Arc<Mutex<Estado>>) {
-    let mut lector = BufReader::new(s.try_clone().unwrap());
-    let mut escritor = s;
+fn atender<S: Read + Write>(s: S, estado: Arc<Mutex<Estado>>) {
+    let mut lector = BufReader::new(s);
     let mut linea = String::new();
     loop {
         linea.clear();
@@ -169,7 +296,7 @@ fn atender(s: TcpStream, estado: Arc<Mutex<Estado>>) {
             Ok(None) => continue,
             Err((c, m)) => json!({"jsonrpc": "2.0", "id": id, "error": {"code": c, "message": m}}),
         };
-        if writeln!(escritor, "{resp}").is_err() {
+        if writeln!(lector.get_mut(), "{resp}").is_err() {
             return;
         }
     }

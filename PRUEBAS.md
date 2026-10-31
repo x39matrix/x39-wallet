@@ -673,7 +673,7 @@ real (no se automatiza) y el montaje en la app (fase F).
 
 ## 5. Primer recorrido en aparato real (signet, sin fondos propios → ingreso del grifo)
 
-Hecho a mano por Sr. X en el Redmi Note 15 5G (modelo 25098RA98G, Android 16 / API 36,
+Hecho a mano por el autor en el aparato de pruebas, un Redmi Note 15 5G (modelo 25098RA98G, Android 16 / API 36,
 arm64-v8a) el 31/10/2026, con el `.lab` debug del sabor `general` montado por `includeBuild`
 (commit 88494463 de la app privada; módulo `:wallet` en 478e9ab). Estado leído desde el
 ordenador solo por `logcat`/`dumpsys` del paquete `.lab` (la app lleva FLAG_SECURE: las capturas
@@ -693,13 +693,13 @@ transacción del grifo, reemplazada (RBF) antes de confirmar; el explorador púb
 la confirmada. La billetera mostró primero la versión que estaba en la mempool y, al confirmar
 la sustituta, el importe confirmado: comportamiento correcto.
 
-Mejoras de uso pedidas tras el recorrido y hechas en el commit siguiente del módulo: flecha de
+Mejoras de uso pedidas por el autor tras el recorrido y hechas en el commit siguiente del módulo: flecha de
 volver en todas las pantallas; botón «Usar servidor público de signet (terceros)» en Ajustes.
 
 ### 5.1 Primer envío real desde el aparato (fase A cerrada en red real)
 
-El 31/10/2026 a la 01:30, con el `.lab` actualizado (módulo `:wallet` en ddf730e), Sr. X envió
-desde el Redmi **10.000 sat** a `tb1q5rwlvpkywkf7gxau6qv83kejrj930t3hhp0nkl` (dirección índice
+El 31/10/2026 a la 01:30, con el `.lab` actualizado (módulo `:wallet` en ddf730e), el autor envió
+desde el aparato de pruebas **10.000 sat** a `tb1q5rwlvpkywkf7gxau6qv83kejrj930t3hhp0nkl` (dirección índice
 0 de la billetera de pruebas de línea de órdenes del portátil, `~/x39-wallet-prueba-signet`):
 revisión → autenticación del sistema → firma → difusión.
 
@@ -739,8 +739,8 @@ movimientos: 1
 ```
 
 Con esto la fase A (envío real en signet: construir → revisar → firmar → difundir → confirmar)
-queda cerrada en red real y desde el móvil. En el aparato, tras **Sincronizar**, Historial debe
-mostrar el envío como «confirmada» (pendiente de que Sr. X lo compruebe).
+queda cerrada en red real y desde el móvil. Comprobado por el autor en el aparato el 31/10/2026:
+tras **Sincronizar**, Historial muestra el envío como «confirmada» y el saldo en 6.050.237 sat.
 
 ## 3. Pendiente de probar
 

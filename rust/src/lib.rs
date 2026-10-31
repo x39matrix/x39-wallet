@@ -41,6 +41,7 @@
 
 pub mod envios;
 pub mod ffi;
+pub mod nodo;
 
 // Andamiaje de UniFFI (debe ir en la raíz del crate).
 uniffi::setup_scaffolding!();
@@ -48,23 +49,21 @@ uniffi::setup_scaffolding!();
 pub(crate) mod mock_electrum;
 
 pub use envios::{EnvioInfo, EstadoEnvio};
+use nodo::Conexion;
+pub use nodo::{comprobar_nodo, NodoInfo};
 
-use bdk_electrum::electrum_client::{self, ElectrumApi};
-use bdk_electrum::BdkElectrumClient;
+use bdk_electrum::electrum_client;
 use bdk_wallet::chain::ChainPosition;
 use bdk_wallet::descriptor::{ExtendedDescriptor, IntoWalletDescriptor};
 use bdk_wallet::file_store::Store;
 use bdk_wallet::miniscript::descriptor::{KeyMap, KeyMapWrapper};
 use bdk_wallet::{ChangeSet, KeychainKind, PersistedWallet, SignOptions, Wallet};
 use bitcoin::bip32::Xpriv;
-use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::hashes::{sha256, Hash};
 use bitcoin::hex::DisplayHex;
 use bitcoin::psbt::Psbt;
 use bitcoin::secp256k1::Secp256k1;
-use bitcoin::{
-    Address, Amount, BlockHash, FeeRate, Network, OutPoint, Transaction, TxOut, Txid, Weight,
-};
+use bitcoin::{Address, Amount, FeeRate, Network, OutPoint, Transaction, TxOut, Txid, Weight};
 // Solo los usa la vía antigua, que vive únicamente en las pruebas.
 #[cfg(test)]
 use bitcoin::{
@@ -130,6 +129,9 @@ pub enum Error {
     /// Hay un envío firmado sin resolver (firmado o de difusión incierta): no se
     /// construye otro hasta que se envíe, se confirme o se cancele.
     EnvioEnCurso(String),
+    /// El certificado TLS del servidor no tiene la huella SPKI esperada (o la huella está
+    /// mal formada): no se habla con él.
+    HuellaServidor(String),
 }
 
 impl std::fmt::Display for Error {
@@ -154,6 +156,7 @@ impl std::fmt::Display for Error {
                 f,
                 "hay un envío sin resolver ({t}); reintentarlo o cancelarlo antes"
             ),
+            Error::HuellaServidor(e) => write!(f, "identidad del servidor: {e}"),
         }
     }
 }
@@ -477,56 +480,24 @@ fn ya_conocida(e: &electrum_client::Error) -> bool {
     }
 }
 
-/// Comprueba que el servidor es de la red esperada: su `genesis_hash` debe ser el del
-/// bloque génesis de esa red. Si no, [`Error::RedServidor`].
-fn comprobar_genesis(c: &impl ElectrumApi, red: Network) -> Result<(), Error> {
-    let f = c.server_features().map_err(red_err)?;
-    let visto = BlockHash::from_str(&f.genesis_hash.to_lower_hex_string())
-        .map_err(|_| Error::RedServidor("genesis_hash ilegible".into()))?;
-    let esperado = genesis_block(red).block_hash();
-    if visto != esperado {
-        return Err(Error::RedServidor(format!(
-            "se esperaba {red}, el servidor anuncia génesis {visto}"
-        )));
-    }
-    Ok(())
-}
-
-/// Abre conexión y verifica la red del servidor. Cada operación conecta de nuevo, así
-/// que la comprobación se repite también tras cualquier reconexión.
-fn conectar(
-    servidor: &str,
-    red: Network,
-    espera: Duration,
-) -> Result<BdkElectrumClient<electrum_client::Client>, Error> {
-    let red = network_permitida(red)?;
-    let cfg = electrum_client::ConfigBuilder::new()
-        .timeout(Some(espera))
-        .retry(1)
-        .build();
-    let c = electrum_client::Client::from_config(servidor, cfg).map_err(red_err)?;
-    comprobar_genesis(&c, red)?;
-    Ok(BdkElectrumClient::new(c))
-}
-
-/// Altura del último bloque que conoce el servidor (de la red `red`, verificada).
-pub fn altura_red(red: Red, servidor: &str) -> Result<u32, Error> {
-    let c = conectar(servidor, red.permitida()?.network(), ESPERA_RED)?;
-    let h = c.inner.block_headers_subscribe().map_err(red_err)?;
-    Ok(h.height as u32)
+/// Altura del último bloque que conoce el servidor (de la red `red`, verificada). `huella`:
+/// huella SPKI del certificado con `ssl://`, la misma que en el resto de operaciones.
+pub fn altura_red(red: Red, servidor: &str, huella: Option<&str>) -> Result<u32, Error> {
+    let c = Conexion::abrir(servidor, red.permitida()?.network(), huella, ESPERA_RED)?;
+    c.altura()
 }
 
 /// Comisión recomendada en sat/vB para confirmar en `bloques` bloques, según el nodo.
 /// Si el nodo no tiene estimación (pasa en signet con poco tráfico) usa su comisión
 /// mínima de retransmisión. Nunca menos de 1 sat/vB.
-pub fn estimar_comision(red: Red, servidor: &str, bloques: usize) -> Result<f64, Error> {
-    let c = conectar(servidor, red.permitida()?.network(), ESPERA_RED)?;
-    let btc_kvb = c.inner.estimate_fee(bloques, None).map_err(red_err)?;
-    let btc_kvb = if btc_kvb > 0.0 {
-        btc_kvb
-    } else {
-        c.inner.relay_fee().map_err(red_err)?
-    };
+pub fn estimar_comision(
+    red: Red,
+    servidor: &str,
+    bloques: usize,
+    huella: Option<&str>,
+) -> Result<f64, Error> {
+    let c = Conexion::abrir(servidor, red.permitida()?.network(), huella, ESPERA_RED)?;
+    let btc_kvb = c.comision_btc_kvb(bloques)?;
     // BTC/kvB → sat/vB: ×1e8 sat/BTC ÷ 1000 vB/kvB.
     Ok((btc_kvb * 100_000.0).max(1.0))
 }
@@ -655,6 +626,8 @@ pub struct Billetera {
     /// Reserva del fichero: se da de baja al soltar la billetera.
     _reserva: Reserva,
     espera: Duration,
+    /// Huella SPKI (hex) del certificado del servidor Electrum, si el usuario la fijó.
+    huella: Option<String>,
     pendiente: Option<Pendiente>,
     envios: envios::Registro,
 }
@@ -689,6 +662,7 @@ impl Billetera {
             red: net,
             _reserva: reserva,
             espera: ESPERA_RED,
+            huella: None,
             pendiente: None,
             envios,
         })
@@ -714,6 +688,7 @@ impl Billetera {
             red: net,
             _reserva: reserva,
             espera: ESPERA_RED,
+            huella: None,
             pendiente: None,
             envios,
         };
@@ -736,6 +711,19 @@ impl Billetera {
         self.espera = espera;
     }
 
+    /// Huella SPKI (SHA-256, hex) del certificado del servidor con `ssl://`: con ella, la
+    /// conexión TLS solo acepta ese certificado. `None` = validación contra las raíces
+    /// públicas (servidor público con certificado reconocido).
+    pub fn fijar_huella_servidor(&mut self, huella: Option<String>) {
+        self.huella = huella
+            .map(|h| h.trim().to_lowercase())
+            .filter(|h| !h.is_empty());
+    }
+
+    fn conexion(&self, servidor: &str) -> Result<Conexion, Error> {
+        Conexion::abrir(servidor, self.red, self.huella.as_deref(), self.espera)
+    }
+
     fn guardar(&mut self) -> Result<(), Error> {
         self.cartera
             .persist(&mut self.almacen)
@@ -756,10 +744,14 @@ impl Billetera {
 
     /// Escaneo completo con gap limit: para una billetera restaurada o la primera vez.
     pub fn escanear(&mut self, servidor: &str) -> Result<(), Error> {
-        let c = conectar(servidor, self.red, self.espera)?;
-        c.populate_tx_cache(self.cartera.tx_graph().full_txs().map(|t| t.tx));
+        let c = self.conexion(servidor)?;
         let pet = self.cartera.start_full_scan();
-        let upd = c.full_scan(pet, GAP_LIMIT, LOTE, true).map_err(red_err)?;
+        let upd = c.escaneo_completo(
+            self.cartera.tx_graph().full_txs().map(|t| t.tx),
+            pet,
+            GAP_LIMIT,
+            LOTE,
+        )?;
         let ahora = ahora_s();
         let cambio = self.envios.observar(&upd.tx_update, ahora);
         self.cartera
@@ -771,10 +763,9 @@ impl Billetera {
     /// Sincronización rápida de las direcciones ya reveladas. Comprueba también el
     /// estado de los envíos firmados (vistos, confirmados o desaparecidos).
     pub fn sincronizar(&mut self, servidor: &str) -> Result<(), Error> {
-        let c = conectar(servidor, self.red, self.espera)?;
-        c.populate_tx_cache(self.cartera.tx_graph().full_txs().map(|t| t.tx));
+        let c = self.conexion(servidor)?;
         let pet = self.cartera.start_sync_with_revealed_spks();
-        let upd = c.sync(pet, LOTE, true).map_err(red_err)?;
+        let upd = c.sincronizacion(self.cartera.tx_graph().full_txs().map(|t| t.tx), pet, LOTE)?;
         let ahora = ahora_s();
         let cambio = self.envios.observar(&upd.tx_update, ahora);
         self.cartera
@@ -1344,12 +1335,12 @@ impl Billetera {
         }
         // Si no se llega a conectar (o el servidor es de otra red) no se ha enviado nada:
         // el estado no cambia y no cuenta como intento.
-        let c = conectar(servidor, self.red, self.espera)?;
+        let c = self.conexion(servidor)?;
         let tx = self.envios.tx(txid)?;
         let ahora = ahora_s();
         // Anotado y en disco ANTES de transmitir; si no se puede guardar, no se transmite.
         self.envios.iniciar_difusion(txid, ahora)?;
-        match c.inner.transaction_broadcast(&tx) {
+        match c.difundir(&tx) {
             Ok(_) => self.envios.marcar(
                 txid,
                 EstadoEnvio::Enviada,
@@ -1506,8 +1497,8 @@ impl Billetera {
         servidor: &str,
         envio: &Envio,
     ) -> Result<String, Error> {
-        let c = conectar(servidor, self.red, self.espera)?;
-        let txid = c.transaction_broadcast(&envio.tx).map_err(red_err)?;
+        let c = self.conexion(servidor)?;
+        let txid = c.difundir(&envio.tx).map_err(red_err)?;
         self.cartera
             .apply_unconfirmed_txs([(envio.tx.clone(), ahora_s())]);
         self.guardar()?;

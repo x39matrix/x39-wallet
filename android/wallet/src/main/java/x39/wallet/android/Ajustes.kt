@@ -9,7 +9,11 @@ import x39.wallet.Red
  * seguridad). El servidor Electrum lo elige el usuario; vacío por defecto: sin servidor no
  * hay red. Nada del mnemónico pasa por aquí.
  */
-class Ajustes(context: Context) {
+class Ajustes(context: Context) : AlmacenConfigNodo {
+
+    override fun leer(): ConfigNodo? = configNodo()
+    override fun guardar(c: ConfigNodo) = guardarConfigNodo(c)
+    override fun borrar() = borrarConfigNodo()
 
     private val prefs: SharedPreferences = context.getSharedPreferences("x39-wallet", Context.MODE_PRIVATE)
 
@@ -33,6 +37,19 @@ class Ajustes(context: Context) {
         return if ("://" in s) s else "ssl://$s"
     }
 
+    /** Huella SPKI (SHA-256, hex) del certificado del nodo; vacía si no se fijó. */
+    var huellaServidor: String
+        get() = prefs.getString(CLAVE_HUELLA, "") ?: ""
+        set(v) = prefs.edit().putString(CLAVE_HUELLA, v.trim().lowercase().filter { it.isLetterOrDigit() }).apply()
+
+    var tunel: ModoTunel
+        get() = ModoTunel.valueOf(prefs.getString(CLAVE_TUNEL, ModoTunel.NINGUNO.name) ?: ModoTunel.NINGUNO.name)
+        set(v) = prefs.edit().putString(CLAVE_TUNEL, v.name).apply()
+
+    var nombreNodo: String
+        get() = prefs.getString(CLAVE_NOMBRE_NODO, "") ?: ""
+        set(v) = prefs.edit().putString(CLAVE_NOMBRE_NODO, v.trim()).apply()
+
     /** `tcp://` va sin cifrar: se avisa (válido en una red local propia o un túnel). */
     fun servidorSinCifrar(): Boolean = urlServidor().startsWith("tcp://")
 
@@ -41,5 +58,36 @@ class Ajustes(context: Context) {
     companion object {
         private const val CLAVE_SERVIDOR = "servidor_electrum"
         private const val CLAVE_RED = "red"
+        private const val CLAVE_HUELLA = "huella_servidor"
+        private const val CLAVE_TUNEL = "tunel"
+        private const val CLAVE_NOMBRE_NODO = "nombre_nodo"
     }
+}
+
+// ---- NodeBridge: configuración del nodo del usuario (persistida en las mismas preferencias) ----
+
+fun Ajustes.configNodo(): ConfigNodo? {
+    val electrum = urlServidor()
+    if (electrum.isEmpty()) return null
+    return ConfigNodo(
+        red = red,
+        electrum = electrum,
+        huellaServidor = huellaServidor.ifBlank { null },
+        tunel = tunel,
+        nombre = nombreNodo,
+    )
+}
+
+fun Ajustes.guardarConfigNodo(c: ConfigNodo) {
+    servidor = c.electrum
+    huellaServidor = c.huellaServidor ?: ""
+    tunel = c.tunel
+    nombreNodo = c.nombre
+}
+
+fun Ajustes.borrarConfigNodo() {
+    servidor = ""
+    huellaServidor = ""
+    tunel = ModoTunel.NINGUNO
+    nombreNodo = ""
 }
