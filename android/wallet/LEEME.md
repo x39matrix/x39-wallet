@@ -141,3 +141,57 @@ comprueba el nodo ahora y, solo si está sano, entrega URL y huella de la MISMA 
 configuración; fijar la huella en el motor y usar la conexión van bajo un mutex, y la huella
 viaja en todas las operaciones (también estimar comisión y altura). El túnel propio (E-3) está
 definido en `docs/nodebridge.md` y no implementado.
+
+## Emparejamiento (fase E-2)
+
+`Emparejamiento.kt` + `JsonEstricto.kt`: analizador y validador del paquete de emparejamiento
+(JSON, versión 1; formato y reglas en `docs/nodebridge.md` §5.1). Todo se valida antes de tocar
+nada: pre-análisis estricto del texto crudo (consumo completo, sin claves duplicadas, sin JSON
+permisivo: el `org.json` de Android sobrescribe duplicadas y el de la JVM las rechaza, por eso
+las pruebas adversarias corren INSTRUMENTADAS), nada que parezca una clave privada dentro de
+nombres o valores (rechazo del paquete entero), esquema cerrado, red igual a la de la billetera,
+servidor `ssl://`/`tcp://` con host literal (sin resolver nombres), huella SPKI de 64 hex
+obligatoria con `ssl://`, túnel opcional bien formado, fechas UTC estrictas con vigencia de 24 h
+como máximo y 5 min de tolerancia de reloj al futuro. WireGuard, con precisión: una clave privada
+con forma de pública NO se puede detectar; si llegara en `clave_publica_nodo` se guardaría como
+pública; E-2 no la usa como privada ni la transmite; la privada del móvil nacerá en el móvil en
+E-3 (pendiente de demostrar).
+`EmparejarActivity`: importa por fichero (selector del sistema, 16 KB) o por QR
+(`EscanearQrActivity`, CameraX + zxing, permiso de cámara pedido al pulsar), muestra lo que trae
+el paquete y, tras confirmación explícita, lo revalida (vigencia incluida) y llama a
+`NodeBridge.adoptarSiSano(config)`: **solo si el nodo da Sano** se guarda la configuración (y los
+datos públicos del túnel, en `Ajustes`, para E-3); si no, se muestra el motivo y no queda rastro.
+«Descartar» cancela la comprobación en marcha: un Sano tardío no se guarda. `adoptarSiSano`
+mira cancelación y generación y guarda DENTRO del mismo cerrojo (`Mutex`) que
+`configurar`/`olvidar`, así que un olvido intermedio no puede quedar pisado; el resultado del
+candidato no toca la altura vista del nodo vigente hasta adoptarlo; configuración y metadatos del
+paquete van en una sola escritura (`Ajustes.guardar(c, paquete)`, `commit()` síncrono). La
+lectura del fichero se corta en 16 KB + 1. El conteo de «doce o más palabras» es un recorrido
+acotado, sin regex de repetición ilimitada (un nombre de 7.000 palabras desbordaba la pila), que
+cuenta secuencias de letras y trata la puntuación como separador (una semilla pegada a «:», «.» o
+paréntesis se rechaza igual). Si `commit()` devuelve `false`, `Ajustes.guardar` restaura la
+configuración anterior en la memoria de las preferencias y lanza; la adopción no publica Sano ni
+anuncia nada, y la configuración activa (variable propia de `NodeBridgeImpl`, la única que leen
+`comprobar()` y `conexionSana()`) sigue siendo la anterior. Probado en el aparato con el directorio
+de preferencias de solo lectura: todo sigue en A, también releyendo el fichero en frío. La configuración importada lleva modo de
+túnel NINGUNO hasta que exista el túnel propio. La herramienta del lado del nodo está en
+`herramientas/nodo/emparejar.sh`; su huella coincide con el vector del motor
+(`herramientas/nodo/pruebas/probar.sh`).
+
+Permiso nuevo del módulo: `CAMERA` (con `uses-feature` opcionales `camera.any`, `camera` y
+`camera.autofocus`). Pruebas: `EmparejamientoTest` (JVM, analizador y validador),
+`EmparejamientoInstrumentadoTest` (adversarias con el `org.json` de Android: texto sobrante,
+claves duplicadas, JSON permisivo, secretos con texto alrededor, fechas con anchuras exactas,
+IPv6, robustez ante miles de palabras), `adoptarSiSano` (cancelación, cambio de generación, olvido
+durante el guardado, candidato lento descartado) y `probar` en `NodeBridgeTest` (JVM) y en
+`NodeBridgeCarrerasInstrumentadoTest` (las dos carreras con el almacén real), y
+`EmparejarActivityInstrumentadoTest` (flujo con repositorio falso: vista previa, guardado solo
+tras Sano, nodo caído sin rastro, Descartar durante un servidor lento, revalidación al confirmar,
+clave privada rechazada).
+
+## Regla fija para todos los scripts del repo
+
+Nunca `echo … | grep -q` bajo `set -o pipefail`: `grep -q` cierra la tubería en cuanto acierta y
+el `echo` puede morir con SIGPIPE, con lo que la tubería falla y el script aborta o toma la rama
+equivocada (ya pasó en `build-native.sh`). `grep` sobre fichero o sobre una here-string
+(`grep -q patrón <<<"$VAR"`), o `[[ "$VAR" =~ patrón ]]`.

@@ -13,7 +13,12 @@ class FakeRepositorio(ctx: Context) : Repositorio {
     override val ajustes = Ajustes(ctx)
     override val almacen = AlmacenSemilla(ctx, "x39-wallet-fake-${System.nanoTime()}")
     override val vista: StateFlow<WalletRepository.Vista> = MutableStateFlow(WalletRepository.Vista())
-    override val nodo: NodeBridge = NodeBridgeImpl(ajustes, kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()), hayVpnActiva = { false })
+    /** Respuesta del «motor» a NodeBridge; por defecto, sin red. */
+    var respuestaNodo: (ConfigNodo) -> x39.wallet.NodoInfo = { throw IllegalStateException("sin red en la prueba") }
+    override val nodo: NodeBridge = NodeBridgeImpl(
+        ajustes, kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()),
+        hayVpnActiva = { false }, comprobador = { c, _ -> respuestaNodo(c) },
+    )
     val difundidas = mutableListOf<String>()
     var fallarDifusion: String? = null
 

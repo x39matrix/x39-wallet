@@ -17,6 +17,8 @@ SEMILLA*
 *.psbt
 *.key
 *.pem
+# Excepción: certificado de PRUEBA (público) del vector de huella SPKI; las pruebas lo necesitan en una copia limpia
+!herramientas/nodo/pruebas/vector.pem
 *.jks
 *.keystore
 local.properties

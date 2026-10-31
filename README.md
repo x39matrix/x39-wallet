@@ -44,6 +44,14 @@ a paso, límites conocidos). Lo que ya está decidido y probado se recoge en `PR
   huella no se valida CA, ni nombre, ni caducidad. La huella viaja en todas las operaciones de
   red. Sin huella, `ssl://` se valida contra las raíces públicas (solo tiene sentido con un
   servidor público de certificado reconocido).
+- **Emparejamiento con el nodo propio**: el nodo genera un paquete JSON (versión 1) con sus datos
+  PÚBLICOS (red, servidor, huella SPKI, nombre, caducidad de 24 h y, opcionalmente, los datos
+  públicos del túnel); el móvil lo importa por fichero o QR, lo valida entero (JSON estricto sin
+  claves duplicadas; cualquier cosa que parezca una clave privada lo rechaza), lo muestra y, tras
+  confirmación, lo revalida y lo guarda **solo si el nodo responde sano**. Una clave privada de
+  WireGuard tiene la misma forma que una pública y no se puede detectar: E-2 no la usa como
+  privada ni la transmite. Herramienta del nodo en `herramientas/nodo/`; formato en
+  `docs/nodebridge.md` §5.1.
 - **Una sola instancia por fichero**: el motor rechaza abrir dos veces el mismo fichero de
   estado en un proceso; el lado Android debe mantener una sola `Billetera` por fichero. La
   protección es por ruta canónica dentro del mismo proceso; no cubre otros procesos. En

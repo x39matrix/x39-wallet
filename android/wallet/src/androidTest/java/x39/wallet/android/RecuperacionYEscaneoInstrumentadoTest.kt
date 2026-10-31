@@ -31,7 +31,8 @@ class RecuperacionYEscaneoInstrumentadoTest {
     private fun limpiar(repo: WalletRepository) {
         repo.cerrar()
         File(ctx.noBackupFilesDir, "x39-wallet").deleteRecursively()
-        repo.ajustes.servidor = ""
+        // Por NodeBridge, no escribiendo las preferencias a mano: la configuración activa vive en él.
+        kotlinx.coroutines.runBlocking { repo.nodo.olvidar() }
     }
 
     private fun sha(f: File) = MessageDigest.getInstance("SHA-256").digest(f.readBytes()).joinToString("") { "%02x".format(it) }
@@ -110,8 +111,11 @@ class RecuperacionYEscaneoInstrumentadoTest {
             assertTrue("la marca sobrevive", repo2.escaneoPendiente())
             repo2.abrir()
             assertTrue(repo2.vista.value.escaneoPendiente)
-            // Servidor público de signet (el vector tiene historia en signet): sincronizar hace el escaneo completo.
-            repo2.ajustes.servidor = "ssl://mempool.space:60602"
+            // Servidor público de signet (el vector tiene historia en signet): sincronizar hace el escaneo
+            // completo. Se configura por NodeBridge (la configuración activa vive en él, no en una
+            // relectura de las preferencias); el servidor público va sin huella.
+            val e = repo2.nodo.configurar(ConfigNodo(Red.SIGNET, "ssl://mempool.space:60602", null, ModoTunel.NINGUNO, "público"))
+            assertTrue("nodo público sano: $e", e.sano)
             repo2.sincronizar()
             assertFalse("la marca se quita al terminar bien", repo2.escaneoPendiente())
             assertFalse(repo2.vista.value.escaneoPendiente)

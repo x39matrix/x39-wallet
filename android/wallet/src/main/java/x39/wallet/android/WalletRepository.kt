@@ -227,19 +227,11 @@ class WalletRepository(context: Context) : Repositorio {
      */
     private suspend fun <T> conRed(f: (ConexionMotor) -> T): T = mutexRed.withLock {
         if (ajustes.urlServidor().isEmpty()) throw ErrorBilletera("no hay servidor Electrum configurado: ponlo en Ajustes")
-        val cm = nodo.conexionSana() ?: throw ErrorBilletera("el nodo no está disponible: ${describir(nodo.estado.value)}")
+        val cm = nodo.conexionSana() ?: throw ErrorBilletera("el nodo no está disponible: ${nodo.estado.value.describir()}")
         abierta?.motor?.fijarHuellaServidor(cm.huella)
         f(cm)
     }
 
-    private fun describir(e: EstadoNodo): String = when (e) {
-        is EstadoNodo.SinConfigurar -> "sin configurar"
-        is EstadoNodo.Conectando -> "conectando"
-        is EstadoNodo.Sano -> "sano"
-        is EstadoNodo.Caido -> e.ultimoError
-        is EstadoNodo.RedIncorrecta -> "es de otra red: ${e.detalle}"
-        is EstadoNodo.HuellaIncorrecta -> "la huella del certificado no es la esperada: ${e.detalle}"
-    }
 
 
     private suspend fun refrescar() = withContext(Dispatchers.IO) { refrescarLocal() }

@@ -60,10 +60,17 @@ dependencies {
     // Pantallas (vistas programáticas) y lifecycleScope.
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("androidx.activity:activity-ktx:1.9.0")
-    // QR de la dirección de recibir.
+    // QR de la dirección de recibir y lectura del QR del paquete de emparejamiento.
     implementation("com.google.zxing:core:3.5.3")
+    // Cámara para leer el QR del paquete (E-2). Misma versión en los cuatro artefactos.
+    implementation("androidx.camera:camera-core:1.4.2")
+    implementation("androidx.camera:camera-camera2:1.4.2")
+    implementation("androidx.camera:camera-lifecycle:1.4.2")
+    implementation("androidx.camera:camera-view:1.4.2")
 
     testImplementation("junit:junit:4.13.2")
+    // org.json real para las pruebas JVM del analizador del paquete (el android.jar de pruebas lo trae vacío).
+    testImplementation("org.json:json:20240303")
     androidTestImplementation("androidx.test:runner:1.5.2")
     androidTestImplementation("androidx.test:core:1.5.0")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")

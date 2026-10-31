@@ -71,9 +71,10 @@ interface NodeBridge {
     suspend fun olvidar()                                 // borra configuración y túnel (revocación local)
     suspend fun comprobar(): EstadoNodo                   // conexión única, sin vigilancia
     suspend fun probar(config: ConfigNodo): EstadoNodo    // mismas reglas, sin guardar ni publicar
+    suspend fun adoptarSiSano(config: ConfigNodo): EstadoNodo // emparejamiento: guarda y publica SOLO si Sano
     fun vigilar(activo: Boolean)                          // vigilancia con reconexión creciente
-    suspend fun importarEmparejamiento(texto: String): ConfigNodo  // QR o fichero; valida y devuelve (E-2)
-    fun clavePublicaDelMovil(): String                    // para mostrarla (QR) al nodo; la privada nunca sale (E-2)
+    // La importación del paquete (QR o fichero) la hace Emparejamiento.analizar(texto, red) (E-2).
+    fun clavePublicaDelMovil(): String                    // para mostrarla (QR) al nodo; la privada nunca sale (E-3)
     suspend fun conexionSana(): ConexionMotor?            // URL + huella de la MISMA generación, solo si Sano
 }
 ```
@@ -123,7 +124,7 @@ móvil por QR o fichero. NodeBridge no inventa nada: valida e importa.
 3. El móvil importa el paquete (QR o fichero), lo valida y comprueba el nodo; solo si da
    `Sano` lo guarda.
 
-Paquete de emparejamiento (texto JSON):
+Paquete de emparejamiento (texto JSON, **versión 1**; lo genera `herramientas/nodo/emparejar.sh`):
 
 ```json
 {
@@ -132,10 +133,10 @@ Paquete de emparejamiento (texto JSON):
   "electrum": "ssl://nodo.ejemplo.local:50002",
   "huella_spki_sha256": "<64 hex>",
   "tunel": {
-    "clave_publica_nodo": "<base64>",
+    "clave_publica_nodo": "<base64 de 32 bytes>",
     "endpoint": "nodo.ejemplo.local:51820",
-    "ips_permitidas": ["10.0.0.0/24"],
-    "direccion_movil": "10.0.0.2/32"
+    "ips_permitidas": ["A.B.C.D/n"],
+    "direccion_movil": "A.B.C.D/32"
   },
   "nombre": "mi nodo",
   "emitido": "2026-10-31T00:00:00Z",
@@ -143,17 +144,48 @@ Paquete de emparejamiento (texto JSON):
 }
 ```
 
-(Las direcciones del ejemplo son privadas de documentación; ninguna es real.)
+(Nombres y direcciones de ejemplo; ninguna es real.)
 
-- El paquete **caduca** (por defecto 24 h): un QR viejo no empareja.
-- El paquete **no contiene ninguna clave privada**; si contiene una (`PrivateKey`, un
-  `[Interface]` completo o cualquier campo de clave privada), se **rechaza** sin importar nada.
-- `tunel` es opcional: sin él, el modo es NINGUNO (nodo alcanzable directamente) o EXTERNO (la
-  app ya tiene una VPN activa; ver §6).
-- NodeBridge valida: versión, red permitida, esquema del punto de acceso, huella bien formada
-  (64 hex), claves públicas en base64 de 32 bytes, endpoint `host:puerto`, IPs permitidas y
-  dirección del móvil bien formadas, caducidad.
-- Tras importar, `comprobar()` debe dar `Sano` antes de guardar nada como definitivo.
+Reglas de validación (todas ANTES de tocar nada; `android/.../Emparejamiento.kt`):
+
+| Campo | Regla |
+|---|---|
+| texto crudo | Pre-análisis **estricto** propio (`JsonEstricto.kt`) antes de `org.json`: exactamente un objeto JSON (RFC 8259) que consume TODO el texto (nada detrás), **sin claves duplicadas en ningún nivel** y sin las extensiones permisivas de `org.json` (comillas simples, claves sin comillas, comentarios). Necesario porque el `org.json` de Android sobrescribe las claves duplicadas en silencio y el de la JVM las rechaza: el veredicto no puede depender de la plataforma. Texto de 16 KB como máximo (la lectura del fichero se corta en 16 KB + 1). |
+| (todo el árbol) | **Nada que parezca una clave privada**: un campo cuyo nombre contenga `priv`, `secret`, `secreto`, `semilla`, `seed`, `mnemo`, `xprv`/`tprv`/`vprv`, `wif`, `passphrase`, `contrase` o `interface`, o un valor que CONTENGA (con texto alrededor también) `PRIVATE KEY`, una clave extendida privada, un WIF o doce o más palabras alfabéticas seguidas (una palabra es una secuencia de letras; la puntuación separa y no esconde: «copia:zoo…», «…wrong.», «(zoo … wrong)» se rechazan; el conteo es un recorrido acotado sin regex) → se **rechaza entero**. Se aplica también al host del servidor y al endpoint del túnel. |
+| WireGuard, con precisión | Una clave privada de WireGuard tiene la misma forma que una pública y **NO se puede detectar**; si llegara en `clave_publica_nodo` se guardaría como pública. E-2 no la usa como privada ni la transmite. La privada del móvil nacerá en el móvil en E-3 (pendiente de demostrar). |
+| esquema | Cerrado: `v` debe ser `1` y solo se admiten los campos de arriba (también dentro de `tunel`); un campo desconocido rechaza. |
+| `red` | `signet`, `regtest` o `testnet` (mainnet no está permitida en esta edición) y **la misma que la billetera**. |
+| `electrum` | `ssl://host:puerto` o `tcp://host:puerto`; host = nombre de host, IPv4 literal o `[IPv6]`; puerto 1 a 65535. Las direcciones se validan como **literales**, nunca se resuelve un nombre desde el validador. |
+| `huella_spki_sha256` | 64 hex (se normaliza a minúsculas). **Obligatoria con `ssl://`**; con `tcp://` no debe venir. |
+| `tunel` (opcional) | `clave_publica_nodo` 32 bytes en base64 (44 caracteres acabados en `=`), `endpoint` `host:puerto`, `ips_permitidas` lista no vacía de redes `A.B.C.D/n` o IPv6 literal `/n` (una sola `::`, IPv4 incrustada solo al final: `::ffff:A.B.C.D` vale, `::::` no), `direccion_movil` opcional `A.B.C.D/32`. En E-2 se validan, se muestran y se guardan; el túnel propio (E-3) los usará. La configuración resultante lleva modo NINGUNO hasta entonces. |
+| `nombre` | 1 a 64 caracteres, una sola línea, sin caracteres de control. |
+| `emitido`, `caduca` | Exactamente `AAAA-MM-DDTHH:MM:SSZ` (UTC): el formato debe consumir toda la cadena (`…Z+09:00` se rechaza). `caduca` posterior a `emitido` y **a no más de 24 h**; `ahora < caduca` (estricto: `caduca == ahora` se rechaza); `emitido` puede estar como máximo 5 min en el futuro: **tolerancia explícita al desajuste de reloj** entre nodo y móvil, y así se dice al usuario. |
+
+- El paquete **caduca** (24 h como máximo): un QR viejo no empareja.
+- **Solo se guarda tras `Sano`**: la pantalla «Emparejar con mi nodo» muestra lo que trae el
+  paquete (nombre, red, servidor, huella abreviada con opción de verla entera, caducidad, túnel si
+  lo hay) y pide confirmación explícita; al confirmar se **vuelve a validar el paquete** (vigencia
+  incluida: no vale la validación de cuando se abrió) y entonces `NodeBridge.adoptarSiSano(config)`
+  comprueba el nodo con las mismas reglas de siempre y, únicamente si da `Sano`, persiste la
+  configuración y la publica. Si no, se muestra el motivo y no queda rastro (ni configuración, ni
+  huella, ni túnel). La adopción es **trabajo cancelable atado a la generación** y **indivisible**
+  con `configurar`/`olvidar`: la comprobación de red corre fuera del cerrojo, pero comprobar la
+  cancelación y la generación y guardar ocurren dentro del MISMO cerrojo que `configurar`/`olvidar`,
+  así que un olvido intermedio no puede quedar pisado por un guardado tardío, y un «Descartar» con
+  el `Sano` llegando después no guarda nada. El resultado del candidato se guarda aparte: no toca la
+  altura vista ni el estado del nodo vigente hasta adoptarlo (descartar un candidato adelantado no
+  deja al nodo vigente «caído» por altura). Configuración y metadatos del paquete (datos públicos
+  del túnel, instante) se persisten en UNA escritura, o nada: `Ajustes.guardar` usa `commit()`
+  síncrono y **lanza si devuelve `false`**, y entonces `adoptarSiSano` no publica `Sano`, no cambia
+  la generación y la pantalla no anuncia la adopción. Como SharedPreferences cambia primero su
+  memoria y luego el disco, `Ajustes.guardar` restaura en las preferencias la configuración anterior
+  cuando el disco falla, y NodeBridge mantiene la configuración **activa en una variable propia**
+  que solo cambia tras un guardado que ha vuelto sin lanzar: `comprobar()` y `conexionSana()` leen
+  esa variable, nunca una relectura fresca de las preferencias.
+- Importación por **fichero** (selector del sistema, 16 KB como máximo) o por **QR** con la cámara
+  (CameraX + zxing; el permiso de cámara se pide al pulsar «Escanear QR» y sin él se puede
+  importar el fichero). El escáner solo devuelve el texto; la validación es la misma en ambos casos.
+- `olvidar()` borra también los datos del paquete (revocación local, §5.3).
 
 ### 5.2 Un móvil, una clave de túnel
 

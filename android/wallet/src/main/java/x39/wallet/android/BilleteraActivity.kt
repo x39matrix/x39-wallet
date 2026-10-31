@@ -43,6 +43,7 @@ class BilleteraActivity : BaseActivity() {
         col.addView(fila)
         col.addView(Estilo.boton(this, "Historial y envíos", principal = false) { startActivity(Intent(this, HistorialActivity::class.java)) })
         col.addView(Estilo.boton(this, "Sincronizar", principal = false) { lanzar { repo.sincronizar() } })
+        col.addView(Estilo.boton(this, "Emparejar con mi nodo (QR o fichero)", principal = false) { startActivity(Intent(this, EmparejarActivity::class.java)) })
         col.addView(Estilo.boton(this, "Ajustes (servidor Electrum)", principal = false) { startActivity(Intent(this, AjustesActivity::class.java)) })
         col.addView(Estilo.texto(this, "Autocustodia: la semilla vive solo en este aparato, cifrada con su clave. Cada firma pide tu autenticación.", 11f, Estilo.tenue))
         setContentView(Estilo.envolver(this, col))

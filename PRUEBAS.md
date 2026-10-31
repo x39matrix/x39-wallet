@@ -742,6 +742,88 @@ Con esto la fase A (envío real en signet: construir → revisar → firmar → 
 queda cerrada en red real y desde el móvil. Comprobado por el autor en el aparato el 31/10/2026:
 tras **Sincronizar**, Historial muestra el envío como «confirmada» y el saldo en 6.050.237 sat.
 
+## 6. Emparejamiento con el nodo (fase E-2)
+
+Tras cuatro vueltas de revisión cruzada (catorce, ocho, tres y dos correcciones, cada una con prueba de regresión).
+
+| Qué | Resultado (31/10/2026) |
+|---|---|
+| `herramientas/nodo/pruebas/probar.sh` | 23 comprobaciones pasadas: la huella SPKI del vector `pruebas/vector.pem` es `d69cfd0c…a6e230de`, **la misma que calcula el motor** (`rust/src/tests.rs`, `huella_spki_vector_fijo`); paquete v1 válido con túnel, `emitido` y `caduca` exactamente 24 h aparte (un solo instante), fichero 600 también al sobrescribir uno existente, sin nada que parezca una clave privada; `tcp://` sin huella; se niega a más de 24 h, a un certificado con clave privada, a una clave de túnel mal formada, a mainnet, a una semilla o un WIF dentro del nombre, a un WIF dentro del host, a cualquier carácter de control en el nombre y a puertos fuera de 1..65535; CIDR validado como el móvil (`999.999.999.999/99` y `::::/64` rechazados, IPv4 incrustada aceptada); límite de 16 KB contado con el salto de línea final; IPv6 con «:» simple al final o al principio rechazada (`fd00::1:/64`, `1:2:3:4:5:6:7:8:/64`) y `fd00::/64` aceptada; semilla pegada a puntuación rechazada; el filtro de palabras mira cada valor por separado (un nombre legítimo de once palabras pasa) |
+| `:wallet:testDebugUnitTest` (JVM) | `EmparejamientoTest` 17 (válido con y sin túnel, `tcp://` sin huella, caducado / `caduca == ahora` / emitido en el futuro / más de 24 h / fecha con cola «Z+09:00», fechas con anchuras exactas y calendario válido, otra red / red desconocida / mainnet, huella mal formada o ausente, diez variantes de clave privada o semilla, texto sobrante y claves duplicadas y JSON permisivo, secretos con texto alrededor y dentro del host, IPv6 literal, túnel mal formado, servidor / nombre con salto de línea / puertos / tamaño, robustez: 7.000 palabras no desbordan la pila; semilla pegada a «:», «.» o paréntesis rechazada; IPv6 con «:» simple al final rechazada); `NodeBridgeTest` 15 (nuevas: `adoptarSiSano` solo guarda si Sano; no guarda si se cancela o cambia la generación; un `olvidar` durante el guardado no queda pisado y config y metadatos van juntos; descartar un candidato lento adelantado no rompe el nodo vigente; `probar` no mueve la altura vista; si el almacén no persiste (`commit()` false) no se adopta ni se publica Sano; si el disco falla DESPUÉS de que el almacén toque su memoria, la configuración activa sigue siendo la anterior); `MnemonicoTest` 6. Total 39, 0 fallos |
+| `:wallet:lintDebug` | 0 errores, 0 avisos (8 informativos `SetTextI18n`, documentados en `lint.xml`) |
+| `:wallet:connectedDebugAndroidTest` en el aparato | 30 pruebas, 0 fallos, 0 omitidas (Redmi Note 15 5G, Android 16; salida abajo) |
+
+Las pruebas adversarias del analizador corren **instrumentadas** (`EmparejamientoInstrumentadoTest`,
+8 pruebas) porque el `org.json` de Android sobrescribe las claves duplicadas y acepta JSON
+permisivo, mientras que el de la JVM rechaza las duplicadas: el verde de la JVM no vale para esto.
+Cubren: paquete válido aceptado en Android; texto sobrante tras el JSON (incluido
+« PRIVATE KEY=synthetic» detrás); `"tunel":{"private_key":…},"tunel":null` y duplicadas en un
+nivel interior o con escape `\u`; claves sin comillas, comillas simples y comentarios; semilla y
+WIF con texto alrededor y WIF dentro del host; fecha con cola, anchuras exactas y calendario,
+`caduca == ahora`, emitido más de 5 min en el futuro; `[::::]` rechazado y `::ffff:A.B.C.D/128`
+aceptado; 7.000 palabras y 16.000 caracteres sin desbordar nada; semilla pegada a «:», «.» o
+paréntesis rechazada. Las carreras de NodeBridge corren también en el aparato con el almacén real
+(`NodeBridgeCarrerasInstrumentadoTest`, 4): `olvidar` durante una adopción lenta no deja nada
+guardado; descartar un candidato adelantado deja al nodo vigente sano a su altura y la adopción
+guarda configuración y metadatos juntos; un almacén cuyo `commit()` devuelve `false` no adopta, no
+publica Sano y no deja nada a medias; y con persistencia REAL (directorio de preferencias de solo
+lectura), partiendo de A en disco y adoptando B, `commit()` falla después de tocar la memoria y
+todo sigue en A: `comprobar()`, `conexionSana()`, la memoria restaurada de las preferencias y el
+fichero releído en frío.
+
+El flujo de pantalla (`EmparejarActivityInstrumentadoTest`, 5 pruebas, repositorio falso con el
+«motor» del nodo sustituido): paquete válido → vista previa → nada guardado antes de confirmar →
+confirmar → Sano → se guardan servidor, huella, nombre y datos públicos del túnel, NodeBridge
+publica Sano y la pantalla se cierra; nodo caído → «No se ha guardado nada» con el motivo y sin
+rastro; **Descartar durante un servidor lento → llega Sano → NO se guarda**; al confirmar se
+revalida: un paquete caducado entre medias se rechaza sin guardar; paquete con un campo de clave
+privada → «PAQUETE RECHAZADO», sin vista previa ni botón de confirmar. En total 30 instrumentadas
+(13 anteriores, 5 de pantalla, 8 adversarias, 4 de carreras).
+
+Resultados por prueba en el aparato (XML de `wallet/build/outputs/androidTest-results/connected/debug/`,
+marca de tiempo 2026-10-31T04:20:28). Nota honesta: la primera pasada de esta vuelta dio 2 fallos en
+`RecuperacionYEscaneoInstrumentadoTest`, porque esa prueba escribía el servidor directamente en
+las preferencias y, con la configuración activa viviendo ya en NodeBridge, eso no configura nada;
+se corrigió la prueba para configurar por `nodo.configurar(...)` (el código de la app nunca escribía
+las preferencias a mano) y la segunda pasada fue limpia:
+
+```text
+x39.wallet.android | tests 30 failures 0 errors 0 skipped 0
+  - AjustesActivityInstrumentadoTest.elBotonDelServidorPublicoRellenaElCampo_soloEnSignet ok 2.614s
+  - AlmacenSemillaInstrumentadoTest.ficheroCifradoFueraDeLasCopiasDeSeguridad ok 0.003s
+  - AlmacenSemillaInstrumentadoTest.laClaveExigeAutenticacionPorOperacion ok 0.08s
+  - BilleterasInstrumentadoTest.mainnetProhibidaPorElMotor ok 0.003s
+  - BilleterasInstrumentadoTest.unaSolaBilleteraPorFichero_tambienDesdeAndroid ok 0.028s
+  - BilleterasInstrumentadoTest.bibliotecaSoloRedesDePrueba ok 0.001s
+  - BilleterasInstrumentadoTest.nuevaSemilla_docePalabras_yCreaBilleteraConByteBufferDirecto ok 0.0s
+  - EmparejamientoInstrumentadoTest.semillaPegadaAPuntuacion_seRechaza_yMilesDePalabrasNoDesbordan ok 0.085s
+  - EmparejamientoInstrumentadoTest.jsonPermisivoDeAndroid_seRechaza ok 0.001s
+  - EmparejamientoInstrumentadoTest.clavesDuplicadas_seRechazanAunqueAndroidLasSobrescribiria ok 0.002s
+  - EmparejamientoInstrumentadoTest.fechasConAnchurasExactas_yRobustezAnteMilesDePalabras ok 0.055s
+  - EmparejamientoInstrumentadoTest.textoSobranteTrasElJson_seRechaza ok 0.002s
+  - EmparejamientoInstrumentadoTest.elPaqueteValidoSeAceptaEnAndroid ok 0.001s
+  - EmparejamientoInstrumentadoTest.fechasEstrictas_eIpv6Literal ok 0.027s
+  - EmparejamientoInstrumentadoTest.secretosDentroDeLosValores ok 0.002s
+  - EmparejarActivityInstrumentadoTest.paqueteConClavePrivada_seRechazaEntero_sinBotonDeConfirmar ok 1.14s
+  - EmparejarActivityInstrumentadoTest.nodoCaido_noGuardaNada_yDiceElMotivo ok 1.11s
+  - EmparejarActivityInstrumentadoTest.descartarDuranteLaComprobacion_cancelaDeVerdad_yElSanoTardioNoSeGuarda ok 3.126s
+  - EmparejarActivityInstrumentadoTest.paqueteValido_vistaPrevia_yConfirmarGuardaSoloTrasSano ok 1.912s
+  - EmparejarActivityInstrumentadoTest.alConfirmarSeRevalida_unPaqueteCaducadoEntreMediasSeRechazaSinGuardar ok 1.138s
+  - EnviarActivityInstrumentadoTest.firmarResultadoDifundir_sinExcepcion_yMuestraElEstado ok 1.515s
+  - EnviarActivityInstrumentadoTest.laFlechaDeVolverCierraLaPantallaComoElBotonAtras ok 1.965s
+  - EnviarActivityInstrumentadoTest.siLaDifusionFalla_loDiceYNoRompe ok 1.388s
+  - NodeBridgeCarrerasInstrumentadoTest.olvidarDuranteUnaAdopcionLenta_noQuedaNadaGuardado ok 0.028s
+  - NodeBridgeCarrerasInstrumentadoTest.siCommitDevuelveFalse_noSeAdoptaNiSePublicaSano_yNoQuedaNadaAMedias ok 0.028s
+  - NodeBridgeCarrerasInstrumentadoTest.descartarCandidatoLento_elNodoVigenteSigueSanoASuAltura_yAdoptarGuardaConfigYMetadatosJuntos ok 0.027s
+  - NodeBridgeCarrerasInstrumentadoTest.siCommitFallaDespuesDeTocarLaMemoria_todoSigueEnA_tambienEnFrio ok 0.028s
+  - NodeBridgeInstrumentadoTest.servidorPublicoDeSignet_sano_yHuellaIncorrecta_rechazada ok 0.559s
+  - RecuperacionYEscaneoInstrumentadoTest.restaurarSinServidor_dejaEscaneoPendiente_ySincronizarLoCompleta ok 18.593s
+  - RecuperacionYEscaneoInstrumentadoTest.recuperarLaClave_noTocaElEstadoNiElRegistroDeEnvios ok 0.205s
+```
+
+No probado todavía: la lectura real de un QR con la cámara del aparato y la importación de un
+fichero desde el selector del sistema (recorrido manual, fase G); el túnel propio no existe (E-3).
+
 ## 3. Pendiente de probar
 
 - Envío real en **signet** desde la app en el Redmi (sección 5); la billetera de prueba de línea de
