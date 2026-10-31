@@ -696,9 +696,51 @@ la sustituta, el importe confirmado: comportamiento correcto.
 Mejoras de uso pedidas tras el recorrido y hechas en el commit siguiente del módulo: flecha de
 volver en todas las pantallas; botón «Usar servidor público de signet (terceros)» en Ajustes.
 
-Pendiente: envío real en signet desde la app (Recibir → otra dirección → Enviar 100000 sat a 2
-sat/vB → revisión → autenticación → firma → difusión → Historial → confirmación), que cierra la
-fase A en red real y desde el móvil.
+### 5.1 Primer envío real desde el aparato (fase A cerrada en red real)
+
+El 31/10/2026 a la 01:30, con el `.lab` actualizado (módulo `:wallet` en ddf730e), Sr. X envió
+desde el Redmi **10.000 sat** a `tb1q5rwlvpkywkf7gxau6qv83kejrj930t3hhp0nkl` (dirección índice
+0 de la billetera de pruebas de línea de órdenes del portátil, `~/x39-wallet-prueba-signet`):
+revisión → autenticación del sistema → firma → difusión.
+
+| Dato | Valor |
+|---|---|
+| txid | `a10728e0ee99b1ad64138e21df7f86e49937bd00f416a8dbdbaa0eba86af98ff` |
+| importe | 10.000 sat |
+| comisión | 281 sat (2 sat/vB) |
+| cambio | 6.050.237 sat a una dirección interna propia |
+| estado en el aparato | «enviada» en Historial; en la mempool a la 01:30 |
+| confirmación | **bloque 328731** (vista desde el portátil a la 01:42, 5.ª consulta automática cada 3 min) |
+
+Comprobación independiente desde el portátil, con el binario del motor contra el servidor
+público de signet (salida íntegra):
+
+```text
+$ x39-billetera-prueba sincronizar ~/x39-wallet-prueba-signet
+servidor: ssl://mempool.space:60602 (signet)
+punta de la red: 328730
+altura sincronizada: 328730
+saldo: 10000 sat (confirmado 0, pendiente 10000, inmaduro 0)
+índices revelados: externo Some(0), interno None
+movimientos: 1
+  a10728e0ee99b1ad64138e21df7f86e49937bd00f416a8dbdbaa0eba86af98ff  +10000 -0 comisión Some(281)  en mempool
+```
+
+Confirmación, vista desde el portátil (salida íntegra de la consulta automática):
+
+```text
+servidor: ssl://mempool.space:60602 (signet)
+punta de la red: 328731
+altura sincronizada: 328731
+saldo: 10000 sat (confirmado 10000, pendiente 0, inmaduro 0)
+índices revelados: externo Some(0), interno None
+movimientos: 1
+  a10728e0ee99b1ad64138e21df7f86e49937bd00f416a8dbdbaa0eba86af98ff  +10000 -0 comisión Some(281)  bloque 328731
+```
+
+Con esto la fase A (envío real en signet: construir → revisar → firmar → difundir → confirmar)
+queda cerrada en red real y desde el móvil. En el aparato, tras **Sincronizar**, Historial debe
+mostrar el envío como «confirmada» (pendiente de que Sr. X lo compruebe).
 
 ## 3. Pendiente de probar
 
