@@ -24,7 +24,7 @@ class BilleteraActivity : BaseActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         col = Estilo.columna(this)
-        col.addView(Estilo.titulo(this, "Billetera Bitcoin (${repo.ajustes.red.name.lowercase()})"))
+        col.addView(cabecera("Billetera Bitcoin (${repo.ajustes.red.name.lowercase()})"))
         val tarjeta = Estilo.tarjeta(this)
         saldo = Estilo.texto(this, "—", 30f).apply { setTypeface(typeface, android.graphics.Typeface.BOLD) }
         detalle = Estilo.texto(this, "", 12f, Estilo.gris)

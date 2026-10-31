@@ -14,10 +14,15 @@ import x39.wallet.alturaRed
 @RequiresApi(Build.VERSION_CODES.M) // Keystore con autenticación por operación
 class AjustesActivity : BaseActivity() {
 
+    companion object {
+        /** Servidor Electrum público de terceros para SIGNET; solo se ofrece en esa red. */
+        const val SERVIDOR_PUBLICO_SIGNET = "ssl://mempool.space:60602"
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val col = Estilo.columna(this)
-        col.addView(Estilo.titulo(this, "Ajustes"))
+        col.addView(cabecera("Ajustes"))
         col.addView(Estilo.seccion(this, "SERVIDOR ELECTRUM (host:puerto)"))
         col.addView(Estilo.texto(this, "Tu propio nodo (Electrum/electrs) o, para pruebas en signet, uno público. Sin esquema se usa ssl://. Con tcp:// va sin cifrar: solo en tu red local o por tu túnel.", 12f, Estilo.gris))
         val campo = Estilo.campo(this, "host:puerto").apply { setText(repo.ajustes.servidor) }
@@ -26,6 +31,13 @@ class AjustesActivity : BaseActivity() {
         col.addView(avisoTcp)
         fun refrescarAviso() { avisoTcp.text = if (campo.text.toString().trim().startsWith("tcp://")) "⚠ tcp:// sin cifrar" else "" }
         refrescarAviso()
+        if (repo.ajustes.red == Red.SIGNET) {
+            col.addView(Estilo.texto(this, "Para pruebas en signet puedes usar un servidor PÚBLICO de terceros (ves lo que consultas y a quién). Lo propio es tu nodo.", 12f, Estilo.gris))
+            col.addView(Estilo.boton(this, "Usar servidor público de signet (terceros)", principal = false) {
+                campo.setText(SERVIDOR_PUBLICO_SIGNET)
+                refrescarAviso()
+            }.apply { contentDescription = "servidor_publico_signet" })
+        }
 
         col.addView(Estilo.seccion(this, "RED"))
         val redes = listOf(Red.SIGNET, Red.REGTEST).filter { Redes.permitida(it) }

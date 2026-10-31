@@ -25,6 +25,23 @@ abstract class BaseActivity : AppCompatActivity() {
 
     protected fun aviso(t: String) = Toast.makeText(this, t, Toast.LENGTH_LONG).show()
 
+    /**
+     * Cabecera de todas las pantallas de la billetera: flecha de volver arriba a la izquierda
+     * (mismo comportamiento que el botón atrás del sistema) y el título.
+     */
+    protected fun cabecera(titulo: String): android.view.View {
+        val fila = Estilo.fila(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
+        val volver = android.widget.TextView(this).apply {
+            text = "\u2190"; textSize = 24f; setTextColor(Estilo.claro)
+            contentDescription = "Volver"
+            setPadding(0, Estilo.dp(this@BaseActivity, 4), Estilo.dp(this@BaseActivity, 16), Estilo.dp(this@BaseActivity, 8))
+            setOnClickListener { onBackPressedDispatcher.onBackPressed() }
+        }
+        fila.addView(volver)
+        fila.addView(Estilo.titulo(this, titulo))
+        return fila
+    }
+
     /** Ejecuta trabajo suspendido; los errores salen como aviso. */
     protected fun lanzar(alFallar: ((Throwable) -> Unit)? = null, bloque: suspend () -> Unit) {
         lifecycleScope.launch {

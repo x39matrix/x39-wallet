@@ -24,6 +24,12 @@ android {
 
     buildFeatures { buildConfig = true }
 
+    // El APK de pruebas instrumentadas apunta a la API actual: con targetSdk 21 Android 13+ abre
+    // la «revisión de permisos» al lanzar la primera pantalla y después bloquea el relanzamiento
+    // desde segundo plano, y ActivityScenario se queda esperando.
+    testOptions { targetSdk = 35 }
+    lint { targetSdk = 35 }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

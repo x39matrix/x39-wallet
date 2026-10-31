@@ -671,8 +671,37 @@ instancia del repositorio y se completa al sincronizar con servidor.
 No probado todavía: las pantallas una por una en el aparato (fase G), el prompt biométrico
 real (no se automatiza) y el montaje en la app (fase F).
 
+## 5. Primer recorrido en aparato real (signet, sin fondos propios → ingreso del grifo)
+
+Hecho a mano por Sr. X en el Redmi Note 15 5G (modelo 25098RA98G, Android 16 / API 36,
+arm64-v8a) el 31/10/2026, con el `.lab` debug del sabor `general` montado por `includeBuild`
+(commit 88494463 de la app privada; módulo `:wallet` en 478e9ab). Estado leído desde el
+ordenador solo por `logcat`/`dumpsys` del paquete `.lab` (la app lleva FLAG_SECURE: las capturas
+salen negras).
+
+| Paso | Resultado |
+|---|---|
+| Pestaña Billetera → Abrir billetera → Crear billetera nueva → 12 palabras copiadas a mano, comprobación de una palabra, autenticación del sistema | billetera creada (signet) |
+| Ajustes → servidor público de signet → Probar conexión | «Conecta: signet, altura 328722» |
+| Sincronizar | altura 328722, saldo 0 |
+| Recibir | dirección índice 0: `tb1qu4fr0cl8scmahhlcdxmrnp25kz0jjtfdayervg` |
+| Grifo de signet a esa dirección → Sincronizar | **6.451.533 sat pendientes**, altura 328723 |
+| txid del ingreso (Historial) | `60fb73a98b6095dd91da3c34253b4cda8054eb5bc9ce81006540860ad4e12dad`, **confirmado en el bloque 328724**, 6.060.518 sat a la dirección índice 0 |
+
+Nota: la cantidad vista como pendiente (6.451.533 sat) correspondía a una versión anterior de la
+transacción del grifo, reemplazada (RBF) antes de confirmar; el explorador público solo muestra
+la confirmada. La billetera mostró primero la versión que estaba en la mempool y, al confirmar
+la sustituta, el importe confirmado: comportamiento correcto.
+
+Mejoras de uso pedidas tras el recorrido y hechas en el commit siguiente del módulo: flecha de
+volver en todas las pantallas; botón «Usar servidor público de signet (terceros)» en Ajustes.
+
+Pendiente: envío real en signet desde la app (Recibir → otra dirección → Enviar 100000 sat a 2
+sat/vB → revisión → autenticación → firma → difusión → Historial → confirmación), que cierra la
+fase A en red real y desde el móvil.
+
 ## 3. Pendiente de probar
 
-- Envío real en **signet** con la billetera `~/x39-wallet-prueba-signet` (espera fondos del
-  faucet): sincronizar, auto-envío a la dirección índice 1, confirmación.
+- Envío real en **signet** desde la app en el Redmi (sección 5); la billetera de prueba de línea de
+  órdenes `~/x39-wallet-prueba-signet` sigue a cero (sin faucet).
 - Las pantallas Android en el aparato una por una, el ciclo completo desde la app (fase G) y NodeBridge.

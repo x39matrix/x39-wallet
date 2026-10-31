@@ -50,7 +50,7 @@ class CrearRestaurarActivity : BaseActivity() {
     private fun inicio() {
         limpiar()
         col.removeAllViews()
-        col.addView(Estilo.titulo(this, "Billetera Bitcoin"))
+        col.addView(cabecera("Billetera Bitcoin"))
         col.addView(Estilo.texto(this, "Red: ${repo.ajustes.red.name.lowercase()} (cámbiala en Ajustes antes de crear). Esta edición solo admite redes de prueba.", 12f, Estilo.gris))
         if (!repo.ajustes.hayServidor()) col.addView(Estilo.texto(this, "⚠ Sin servidor Electrum configurado: podrás crear la billetera, pero no sincronizar hasta ponerlo en Ajustes.", 12f, Estilo.aviso))
         col.addView(Estilo.boton(this, "Crear billetera nueva") { crear() })
@@ -65,7 +65,7 @@ class CrearRestaurarActivity : BaseActivity() {
             val chars = s.palabras()
             palabras = chars
             col.removeAllViews()
-            col.addView(Estilo.titulo(this, "Tus 12 palabras"))
+            col.addView(cabecera("Tus 12 palabras"))
             col.addView(Estilo.texto(this, "Cópialas a mano, en orden, en un lugar seguro. Se muestran UNA sola vez: si sales de esta pantalla desaparecen. Sin ellas no hay forma de recuperar los fondos. No se pueden copiar al portapapeles.", 13f, Estilo.gris))
             val caja = Estilo.tarjeta(this)
             val tv = TextView(this).apply {
@@ -122,7 +122,7 @@ class CrearRestaurarActivity : BaseActivity() {
     private fun restaurar() {
         limpiar()
         col.removeAllViews()
-        col.addView(Estilo.titulo(this, "Restaurar"))
+        col.addView(cabecera("Restaurar"))
         col.addView(Estilo.texto(this, "Escribe las 12 palabras separadas por espacios. No se puede pegar desde el portapapeles. Tras restaurar hace falta un escaneo completo con tu servidor antes de poder enviar.", 13f, Estilo.gris))
         val campo = campoMnemonico("palabra1 palabra2 … palabra12").apply { minLines = 3 }
         col.addView(campo)
@@ -142,7 +142,7 @@ class CrearRestaurarActivity : BaseActivity() {
     private fun recuperacion() {
         limpiar()
         col.removeAllViews()
-        col.addView(Estilo.titulo(this, "Recuperar la clave"))
+        col.addView(cabecera("Recuperar la clave"))
         col.addView(Estilo.texto(this, "La billetera y sus envíos se conservan. Escribe las 12 palabras de ESTA billetera: el motor comprueba que coinciden (sin firmar nada) y solo entonces se crea una clave nueva y se vuelve a cifrar la semilla. Si no coinciden o cancelas, todo queda como estaba.", 13f, Estilo.gris))
         val campo = campoMnemonico("palabra1 palabra2 … palabra12").apply { minLines = 3 }
         col.addView(campo)

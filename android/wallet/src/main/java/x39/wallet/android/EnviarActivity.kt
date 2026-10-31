@@ -23,7 +23,7 @@ class EnviarActivity : BaseActivity() {
 
     private fun formulario() {
         col.removeAllViews()
-        col.addView(Estilo.titulo(this, "Enviar"))
+        col.addView(cabecera("Enviar"))
         val destino = Estilo.campo(this, "Dirección de destino")
         val importe = Estilo.campo(this, "Importe en sat", numerico = true)
         val tasa = Estilo.campo(this, "Comisión en sat/vB", numerico = true)
@@ -44,7 +44,7 @@ class EnviarActivity : BaseActivity() {
 
     private fun revision(p: PsbtPendiente) {
         col.removeAllViews()
-        col.addView(Estilo.titulo(this, "Revisa antes de firmar"))
+        col.addView(cabecera("Revisa antes de firmar"))
         val t = Estilo.tarjeta(this)
         t.addView(Estilo.texto(this, "Destino\n${p.destino}", 13f))
         t.addView(Estilo.texto(this, "Importe: ${Estilo.sat(p.importeSat)}"))
@@ -65,7 +65,7 @@ class EnviarActivity : BaseActivity() {
     /** Tras firmar: la columna ya está en pantalla (no se vuelve a envolver); difunde y muestra el estado. */
     internal fun resultado(txid: String) {
         col.removeAllViews()
-        col.addView(Estilo.titulo(this, "Firmada"))
+        col.addView(cabecera("Firmada"))
         col.addView(Estilo.texto(this, "txid $txid", 12f, Estilo.gris))
         col.addView(Estilo.texto(this, "Las monedas ya quedan reservadas en esta billetera. Difundiendo…", 13f))
         lanzar(alFallar = { e ->

@@ -29,7 +29,7 @@ class HistorialActivity : BaseActivity() {
 
     private fun pintar(v: WalletRepository.Vista) {
         col.removeAllViews()
-        col.addView(Estilo.titulo(this, "Historial"))
+        col.addView(cabecera("Historial"))
         col.addView(Estilo.seccion(this, "ENVÍOS FIRMADOS"))
         if (v.envios.isEmpty()) col.addView(Estilo.texto(this, "Ninguno", 13f, Estilo.tenue))
         for (e in v.envios.asReversed()) col.addView(tarjetaEnvio(e))

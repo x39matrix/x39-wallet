@@ -15,7 +15,7 @@ class RecibirActivity : BaseActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val col = Estilo.columna(this)
-        col.addView(Estilo.titulo(this, "Recibir"))
+        col.addView(cabecera("Recibir"))
         val qr = ImageView(this).apply { adjustViewBounds = true; setPadding(0, Estilo.dp(this@RecibirActivity, 8), 0, Estilo.dp(this@RecibirActivity, 8)) }
         val dir = TextView(this).apply { textSize = 13f; setTextColor(Estilo.claro); setTextIsSelectable(true) }
         col.addView(qr); col.addView(dir)

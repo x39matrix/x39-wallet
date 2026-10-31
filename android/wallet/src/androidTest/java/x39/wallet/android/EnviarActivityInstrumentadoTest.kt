@@ -46,6 +46,30 @@ class EnviarActivityInstrumentadoTest {
         }
     }
 
+    private fun buscar(v: View, desc: String): View? {
+        if (v.contentDescription == desc) return v
+        if (v is ViewGroup) for (i in 0 until v.childCount) buscar(v.getChildAt(i), desc)?.let { return it }
+        return null
+    }
+
+    @Test
+    fun laFlechaDeVolverCierraLaPantallaComoElBotonAtras() {
+        WalletRepository.fijarParaPruebas(FakeRepositorio(ctx))
+        val escenario = ActivityScenario.launch<EnviarActivity>(Intent(ctx, EnviarActivity::class.java))
+        escenario.onActivity { a ->
+            val flecha = buscar(a.window.decorView, "Volver") ?: throw AssertionError("no hay flecha de volver")
+            flecha.performClick()
+        }
+        // Atrás predictivo (Android 13+): la actividad termina cuando acaba la animación.
+        // Hasta 8 s para llegar a DESTROYED.
+        val limite = System.currentTimeMillis() + 8_000
+        while (escenario.state != androidx.lifecycle.Lifecycle.State.DESTROYED && System.currentTimeMillis() < limite) {
+            Thread.sleep(100)
+        }
+        assertEquals(androidx.lifecycle.Lifecycle.State.DESTROYED, escenario.state)
+        escenario.close()
+    }
+
     @Test
     fun siLaDifusionFalla_loDiceYNoRompe() {
         val fake = FakeRepositorio(ctx).apply { fallarDifusion = "sin respuesta del servidor" }
