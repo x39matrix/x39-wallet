@@ -742,6 +742,47 @@ Con esto la fase A (envío real en signet: construir → revisar → firmar → 
 queda cerrada en red real y desde el móvil. Comprobado por el autor en el aparato el 31/10/2026:
 tras **Sincronizar**, Historial muestra el envío como «confirmada» y el saldo en 6.050.237 sat.
 
+### 5.2 Emparejar con mi nodo: recorrido manual en el aparato (fase E-2 en real)
+
+Hecho a mano por el autor el 31/10/2026 entre las 6:02 y las 6:40 (horas locales del aparato,
+CET; las fechas que llevan los paquetes van en UTC) en el mismo Redmi Note 15 5G, con el `.lab`
+1.0.6 (vc43) recompilado con el módulo `:wallet` en 2d653cd (E-2) e instalado con `adb install -r`
+sobre el anterior: billetera y Keystore conservados (saldo 6.050.237 sat, nodo público sano a
+328760 al empezar). Los paquetes los generó `herramientas/nodo/emparejar.sh` en ficheros
+temporales fuera del repo y se mostraron como QR en la pantalla del ordenador, uno cada vez. El
+nodo propio (mainnet) no entró: un paquete suyo solo probaría el rechazo por génesis, y eso queda
+para otro día. Capturas de pantalla del propio aparato para cada mensaje: las pantallas de saldo,
+Ajustes y Emparejar no llevan FLAG_SECURE; las de semilla, firma, Historial y el visor de la
+cámara sí (`Window.protegerContraCapturas()`, por diseño).
+
+Acceso: pestaña Billetera → «Abrir billetera» → «Emparejar con mi nodo (QR o fichero)». La
+actividad no es exportada: `am start` desde adb devuelve «Permission Denial … not exported», un
+punto a favor (ninguna otra app puede abrirla con un paquete dentro).
+
+| Prueba | Paquete | Resultado |
+|---|---|---|
+| 0 · QR «hola» (cámara real) | el texto `hola` | rechazo inmediato «PAQUETE RECHAZADO: no es un paquete de emparejamiento (JSON inválido: el paquete debe ser un objeto JSON)», sin vista previa, «No se ha guardado nada» |
+| B · QR, nodo inexistente | `ssl://192.0.2.44:50002` (el propio móvil, puerto cerrado), huella del vector `pruebas/vector.pem` (`d69cfd0c…a6e230de`), nombre «nodo-inexistente-B» | vista previa completa (nombre, red, servidor, huella abreviada con «Ver la huella entera», emitido y caduca en UTC, «Túnel: no trae»). **Descartar** deja el nodo sin cambios. **Confirmar** → «No se ha guardado nada: servidor Electrum: no se pudo conectar con 192.0.2.44:50002: Connection refused (os error 111)», en naranja (paquete válido, nodo que no responde: distinto del rechazo en rojo de un paquete malo). El nodo activo quedó intacto, y su altura avanzó de 328760 a 328763 durante el recorrido: la vigilancia del nodo activo no se interrumpió por el candidato |
+| C · QR, campo con pinta de clave privada | el mismo B más `"clave_privada": "<64 hex>"`, nombre «nodo-inexistente-C» | rechazo inmediato en rojo «PAQUETE RECHAZADO: el paquete trae un campo que parece una clave privada («clave_privada»): se rechaza entero», sin vista previa, sin botón de confirmar, sin tocar la red. `emparejar.sh` se negó a emitir ese paquete; hubo que montarlo a mano |
+| D · QR, paquete REAL del servidor público | certificado vivo de `mempool.space:60602` (obtenido con `openssl s_client -showcerts`; emisor Sectigo, válido hasta el 06/04/2027), huella calculada por `emparejar.sh` = `c15ee689…f30dd4`, nombre «publico-prueba» | vista previa; **Confirmar** → SANO con la huella fijada (ya no por la excepción del servidor público); adoptado y guardado; aviso «Nodo emparejado y sano: publico-prueba»; la línea del nodo en el saldo pasa a «nodo sano · altura 328764 · 38 ms · huella comprobada». Ajustes muestra servidor y huella rellenos (el nombre no aparece en Ajustes: anotado en mejoras) y «Nodo SANO … · huella comprobada» |
+| E · fichero, selector del sistema | `D-publico-prueba.json` y `B-nodo-inexistente.json` copiados con `adb push` a `/sdcard/Download/` | «Importar fichero» → Download → D adoptado de nuevo (6:34 y 6:37), mismo resultado que por QR; B rechazado con el mismo «Connection refused», nada guardado, nodo sin cambios |
+| Persistencia | — | tras cerrar la app del todo y reabrirla (6:40): nodo sano, 35 ms, «huella comprobada» |
+
+Notas:
+
+- La huella de D dejará de valer cuando mempool.space renueve su certificado (como muy tarde el
+  06/04/2027). «Usar servidor público de signet (terceros)» en Ajustes recupera la excepción sin
+  huella.
+- Los ficheros entrados por adb no salieron en «Recientes» del selector del sistema; se navegó a
+  la carpeta Download.
+- La adopción contra un nodo PROPIO en signet queda pendiente de tener uno (el propio es mainnet).
+- La rama «permiso de cámara denegado» no se probó hoy: pendiente.
+
+Mejoras menores anotadas tras el recorrido, sin tocar hoy: quitar «(os error 111)» del texto al
+usuario; atajo a Emparejar desde los ajustes del nodo; mostrar el nombre del nodo emparejado en
+Ajustes si no aparece; nota en el registro de ediciones de la app privada sobre el permiso de
+cámara que el `.lab` hereda del módulo (diff aparte).
+
 ## 6. Emparejamiento con el nodo (fase E-2)
 
 Tras cuatro vueltas de revisión cruzada (catorce, ocho, tres y dos correcciones, cada una con prueba de regresión).
@@ -821,8 +862,12 @@ x39.wallet.android | tests 30 failures 0 errors 0 skipped 0
   - RecuperacionYEscaneoInstrumentadoTest.recuperarLaClave_noTocaElEstadoNiElRegistroDeEnvios ok 0.205s
 ```
 
-No probado todavía: la lectura real de un QR con la cámara del aparato y la importación de un
-fichero desde el selector del sistema (recorrido manual, fase G); el túnel propio no existe (E-3).
+La lectura real de un QR con la cámara del aparato y la importación de un fichero desde el
+selector del sistema quedaron probadas a mano el 31/10/2026 (§5.2: tres lecturas de
+paquete por QR (B dos veces, C y D) más un QR que no era paquete; tres importaciones por fichero
+(D dos veces, B una); una adopción real con huella fijada que sobrevive al cierre de la app). Siguen sin
+probar: la rama «permiso de cámara denegado», la adopción contra un nodo propio en signet y el
+túnel propio, que no existe (E-3).
 
 ## 3. Pendiente de probar
 
