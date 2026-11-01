@@ -123,7 +123,7 @@ class CrearRestaurarActivity : BaseActivity() {
         limpiar()
         col.removeAllViews()
         col.addView(cabecera("Restaurar"))
-        col.addView(Estilo.texto(this, "Escribe las 12 palabras separadas por espacios. No se puede pegar desde el portapapeles. Tras restaurar hace falta un escaneo completo con tu servidor antes de poder enviar.", 13f, Estilo.gris))
+        col.addView(Estilo.texto(this, "Escribe las 12 palabras separadas por espacios. No se puede pegar desde el portapapeles. Tras restaurar hace falta un escaneo completo con tu servidor antes de poder enviar: lo que el servidor muestre volverá como movimientos, pero los envíos firmados o inciertos anteriores no se recuperan desde la semilla.", 13f, Estilo.gris))
         val campo = campoMnemonico("palabra1 palabra2 … palabra12").apply { minLines = 3 }
         col.addView(campo)
         col.addView(Estilo.boton(this, "Proteger y restaurar") {

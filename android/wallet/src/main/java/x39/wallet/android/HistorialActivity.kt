@@ -31,7 +31,7 @@ class HistorialActivity : BaseActivity() {
         col.removeAllViews()
         col.addView(cabecera("Historial"))
         col.addView(Estilo.seccion(this, "ENVÍOS FIRMADOS"))
-        if (v.envios.isEmpty()) col.addView(Estilo.texto(this, "Ninguno", 13f, Estilo.tenue))
+        if (v.envios.isEmpty()) col.addView(Estilo.texto(this, "Ninguno (lo firmado o incierto de otra instalación no se recupera desde la semilla; lo que el servidor muestra vuelve abajo como movimientos)", 13f, Estilo.tenue))
         for (e in v.envios.asReversed()) col.addView(tarjetaEnvio(e))
         col.addView(Estilo.seccion(this, "MOVIMIENTOS"))
         if (v.movimientos.isEmpty()) col.addView(Estilo.texto(this, "Sin movimientos todavía", 13f, Estilo.tenue))
