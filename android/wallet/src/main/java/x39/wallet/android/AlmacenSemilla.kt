@@ -44,8 +44,8 @@ class ClaveInvalidadaException(causa: Throwable? = null) :
  *    se quita; primero se prueba.)
  *  - La cabecera del fichero (versión y longitud del IV) va ligada al cifrado como AAD de
  *    GCM: una cabecera manipulada no descifra.
- *  - El fichero cifrado vive en `noBackupFilesDir/x39-wallet/`, excluido de las copias de
- *    seguridad; las reglas de `res/xml` lo excluyen también si la app las referencia. Tras
+ *  - El fichero cifrado vive en el directorio de su edición bajo `noBackupFilesDir`, excluido
+ *    de las copias de seguridad; las reglas de `res/xml` lo excluyen también si la app las referencia. Tras
  *    el renombrado atómico se hace fsync del directorio (igual que en el motor Rust).
  *  - El texto en claro solo existe en memoria nativa directa ([Mnemonico]); el cifrado y el
  *    descifrado trabajan sobre `ByteBuffer` directos. Lo que el proveedor del Keystore copie
@@ -55,9 +55,9 @@ class ClaveInvalidadaException(causa: Throwable? = null) :
  *        `prepararDescifrado()` → prompt con el cipher → `leer(cipherAutenticado)`.
  */
 @RequiresApi(Build.VERSION_CODES.M) // el Keystore con autenticación por operación exige Android 6
-class AlmacenSemilla(context: Context, private val alias: String = ALIAS_POR_DEFECTO) {
+class AlmacenSemilla(context: Context, private val alias: String = PerfilBilletera.actual.aliasSemilla) {
 
-    private val dir = File(context.noBackupFilesDir, "x39-wallet")
+    private val dir = PerfilBilletera.actual.directorio(context.noBackupFilesDir)
     private val fichero = File(dir, "semilla.enc")
     private val almacen: KeyStore = KeyStore.getInstance(PROVEEDOR).apply { load(null) }
 
@@ -227,6 +227,7 @@ class AlmacenSemilla(context: Context, private val alias: String = ALIAS_POR_DEF
     }
 
     companion object {
+        /** Alias histórico de la edición de pruebas; el alias efectivo depende del perfil. */
         const val ALIAS_POR_DEFECTO = "x39-wallet-semilla"
         private const val PROVEEDOR = "AndroidKeyStore"
         private const val TRANSFORMACION = "AES/GCM/NoPadding"

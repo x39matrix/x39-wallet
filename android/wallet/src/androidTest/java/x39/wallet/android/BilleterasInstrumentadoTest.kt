@@ -26,10 +26,12 @@ class BilleterasInstrumentadoTest {
 
     @Test
     fun bibliotecaSoloRedesDePrueba() {
-        assertEquals("x39wallet-redes=solo-prueba", redesPermitidas())
+        val esMainnet = Redes.permitida(Red.MAINNET)
+        val esperado = if (esMainnet) "x39wallet-redes=mainnet" else "x39wallet-redes=solo-prueba"
+        assertEquals(esperado, redesPermitidas())
         Redes.comprobarBiblioteca()
-        assertTrue(Redes.permitida(Red.SIGNET))
-        assertTrue(Redes.permitida(Red.REGTEST))
+        assertEquals(!esMainnet, Redes.permitida(Red.SIGNET))
+        assertEquals(!esMainnet, Redes.permitida(Red.REGTEST))
     }
 
     @Test
@@ -49,6 +51,30 @@ class BilleterasInstrumentadoTest {
             }
         }
         assertTrue(f.exists())
+    }
+
+    @Test
+    fun semillaNativa_borradoExplicitoImpideLeerMasBytes() {
+        nuevaSemilla().use { nativa ->
+            assertTrue(nativa.longitud() > 0u)
+            nativa.borrar()
+            nativa.borrar()
+            assertEquals(0u, nativa.longitud())
+            try {
+                nativa.byteEn(0u)
+                fail("una semilla borrada no puede leerse")
+            } catch (_: x39.wallet.Exception.Semilla) {
+            }
+        }
+    }
+
+    @Test
+    fun semillaNueva_cierraElObjetoNativoAntesDeUsarlaEnAndroid() {
+        val nativa = nuevaSemilla()
+        SemillaNueva(nativa).use { semilla ->
+            assertTrue(nativa.uniffiIsDestroyed)
+            semilla.comoMnemonico().use { m -> assertTrue(m.longitud > 0) }
+        }
     }
 
     @Test
@@ -75,6 +101,7 @@ class BilleterasInstrumentadoTest {
 
     @Test
     fun mainnetProhibidaPorElMotor() {
+        org.junit.Assume.assumeFalse(Redes.permitida(Red.MAINNET))
         val f = ficheroNuevo()
         try {
             SemillaNueva(nuevaSemilla()).use { s -> s.comoMnemonico().use { Billeteras.crear(it, Red.MAINNET, f) } }

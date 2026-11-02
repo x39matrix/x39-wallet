@@ -18,8 +18,11 @@ android {
         // Única ABI: la biblioteca nativa solo se compila para arm64-v8a.
         ndk { abiFilters += "arm64-v8a" }
         // Redes que la capa Android acepta (además de la feature de Rust: sin `mainnet`).
-        buildConfigField("String", "REDES_PERMITIDAS", "\"signet,regtest\"")
-        buildConfigField("String", "MARCADOR_REDES_ESPERADO", "\"x39wallet-redes=solo-prueba\"")
+        val esMainnet = providers.gradleProperty("x39.mainnet").orNull == "true" || System.getenv("X39_MAINNET") == "1"
+        val redesPermitidas = if (esMainnet) "mainnet" else "signet,regtest"
+        val marcadorEsperado = if (esMainnet) "x39wallet-redes=mainnet" else "x39wallet-redes=solo-prueba"
+        buildConfigField("String", "REDES_PERMITIDAS", "\"$redesPermitidas\"")
+        buildConfigField("String", "MARCADOR_REDES_ESPERADO", "\"$marcadorEsperado\"")
     }
 
     buildFeatures { buildConfig = true }

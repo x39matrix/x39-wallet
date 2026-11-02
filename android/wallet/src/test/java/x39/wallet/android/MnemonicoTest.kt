@@ -7,6 +7,8 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import x39.wallet.NoHandle
+import x39.wallet.SemillaGenerada
 
 /** Pruebas JVM (sin dispositivo) del contrato del mnemónico. */
 class MnemonicoTest {
@@ -95,4 +97,73 @@ class MnemonicoTest {
         assertFalse(palabras.isEmpty())
         palabras.fill('\u0000')
     }
+    private class FuenteNativaSimulada(
+        private val falloLectura: Int? = null,
+        private val falloBorrado: Boolean = false,
+        private val falloCierre: Boolean = false,
+    ) : SemillaGenerada(NoHandle) {
+        val original = byteArrayOf(97, 98, 99)
+        var borrada = false
+        var cerrada = false
+        override fun longitud(): UInt = original.size.toUInt()
+        override fun byteEn(indice: UInt): UByte {
+            if (indice.toInt() == falloLectura) throw IllegalStateException("lectura interrumpida")
+            return original[indice.toInt()].toUByte()
+        }
+        override fun borrar() {
+            original.fill(0)
+            borrada = true
+            if (falloBorrado) throw IllegalStateException("fallo al borrar")
+        }
+        override fun close() {
+            cerrada = true
+            if (falloCierre) throw IllegalStateException("fallo al cerrar")
+        }
+    }
+
+    @Test
+    fun semillaNueva_nativaSeBorraYCierraAntesDeEntregarLaCopia() {
+        val origen = FuenteNativaSimulada()
+        SemillaNueva(origen).use { semilla ->
+            assertTrue(origen.borrada)
+            assertTrue(origen.cerrada)
+            assertTrue(origen.original.all { it == 0.toByte() })
+            val palabras = semilla.palabras()
+            assertArrayEquals(charArrayOf('a', 'b', 'c'), palabras)
+            palabras.fill('\u0000')
+        }
+    }
+
+    @Test
+    fun semillaNueva_siFallaLaLecturaParcial_borraYCierraLaNativa() {
+        val origen = FuenteNativaSimulada(falloLectura = 1)
+        var intermedio: ByteArray? = null
+        try {
+            SemillaNueva.extraerYBorrar(origen) { n -> ByteArray(n).also { intermedio = it } }
+            fail("la lectura interrumpida debe fallar")
+        } catch (e: IllegalStateException) {
+            assertEquals("lectura interrumpida", e.message)
+        }
+        assertTrue(origen.borrada)
+        assertTrue(origen.cerrada)
+        assertTrue(origen.original.all { it == 0.toByte() })
+        assertTrue(intermedio != null && intermedio!!.all { it == 0.toByte() })
+    }
+
+    @Test
+    fun semillaNueva_siFallaLaLimpieza_noDevuelveSemillaYCierraSiempre() {
+        for (origen in listOf(
+            FuenteNativaSimulada(falloBorrado = true),
+            FuenteNativaSimulada(falloCierre = true),
+        )) {
+            try {
+                SemillaNueva(origen)
+                fail("el fallo de limpieza debe impedir entregar la semilla")
+            } catch (_: IllegalStateException) {
+            }
+            assertTrue(origen.borrada)
+            assertTrue(origen.cerrada)
+        }
+    }
+
 }

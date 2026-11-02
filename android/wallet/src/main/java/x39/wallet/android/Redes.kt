@@ -16,7 +16,11 @@ object Redes {
 
     fun permitida(red: Red): Boolean = red.name.lowercase() in permitidas
 
-    /** Lanza si la biblioteca nativa cargada no es la de solo redes de prueba. */
+    fun disponibles(): List<Red> = listOf(Red.MAINNET, Red.SIGNET, Red.REGTEST).filter { permitida(it) }
+
+    fun porDefecto(): Red = if (permitida(Red.MAINNET)) Red.MAINNET else Red.SIGNET
+
+    /** Lanza si las redes de la biblioteca nativa cargada no coinciden con BuildConfig.MARCADOR_REDES_ESPERADO. */
     fun comprobarBiblioteca() {
         val marcador = redesPermitidas()
         check(marcador == BuildConfig.MARCADOR_REDES_ESPERADO) {

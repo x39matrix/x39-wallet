@@ -60,7 +60,7 @@ class WalletRepository(context: Context) : Repositorio {
         Redes.exigirAndroid() // API 23+
         AlmacenSemilla(ctx)
     }
-    private val fichero = File(File(ctx.noBackupFilesDir, "x39-wallet"), "estado.dat")
+    private val fichero = PerfilBilletera.actual.ficheroEstado(ctx.noBackupFilesDir)
     /** Marca persistida: restaurada sin escanear; sobrevive al cierre del proceso. */
     private val marcaEscaneo = File(fichero.path + ".escaneo-pendiente")
     private val ambito = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)

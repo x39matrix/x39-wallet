@@ -52,7 +52,7 @@ class AjustesActivity : BaseActivity() {
         col.addView(spinnerTunel)
 
         col.addView(Estilo.seccion(this, "RED"))
-        val redes = listOf(Red.SIGNET, Red.REGTEST).filter { Redes.permitida(it) }
+        val redes = Redes.disponibles()
         val spinner = Spinner(this).apply {
             adapter = ArrayAdapter(this@AjustesActivity, android.R.layout.simple_spinner_dropdown_item, redes.map { it.name.lowercase() })
             setSelection(redes.indexOf(repo.ajustes.red).coerceAtLeast(0))

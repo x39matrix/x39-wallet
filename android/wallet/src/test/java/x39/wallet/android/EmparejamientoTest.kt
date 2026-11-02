@@ -11,12 +11,14 @@ import x39.wallet.Red
 class EmparejamientoTest {
 
     private val ahora = 1_767_225_600L // 2026-01-01T00:00:00Z
+    private val redActiva = Redes.porDefecto()
+    private val nombreRedActiva = redActiva.name.lowercase()
     private val huella = "d69cfd0cee1cb723598e98e240ec62f14cc0ef834f47872dd6c29d4da6e230de"
     private val clavePublica = "A".repeat(43) + "="
 
     private fun paquete(
         v: String = "1",
-        red: String = "\"signet\"",
+        red: String = "\"$nombreRedActiva\"",
         electrum: String = "\"ssl://nodo.ejemplo.local:50002\"",
         huellaCampo: String? = "\"$huella\"",
         tunel: String? = null,
@@ -35,7 +37,7 @@ class EmparejamientoTest {
 
     private val tunelOk = """{"clave_publica_nodo": "$clavePublica", "endpoint": "nodo.ejemplo.local:51820", "ips_permitidas": ["127.0.0.1/32"], "direccion_movil": "127.0.0.2/32"}"""
 
-    private fun rechazo(texto: String, red: Red = Red.SIGNET): String {
+    private fun rechazo(texto: String, red: Red = redActiva): String {
         try {
             Emparejamiento.analizar(texto, red, ahora)
         } catch (e: ErrorEmparejamiento) {
@@ -46,8 +48,8 @@ class EmparejamientoTest {
 
     @Test
     fun validoSinTunel_yLaConfigNoTieneTunel() {
-        val p = Emparejamiento.analizar(paquete(), Red.SIGNET, ahora)
-        assertEquals(Red.SIGNET, p.red)
+        val p = Emparejamiento.analizar(paquete(), redActiva, ahora)
+        assertEquals(redActiva, p.red)
         assertEquals("ssl://nodo.ejemplo.local:50002", p.electrum)
         assertEquals(huella, p.huellaSpki)
         assertNull(p.tunel)
@@ -61,7 +63,7 @@ class EmparejamientoTest {
 
     @Test
     fun validoConTunel_huellaEnMayusculasSeNormaliza() {
-        val p = Emparejamiento.analizar(paquete(huellaCampo = "\"${huella.uppercase()}\"", tunel = tunelOk), Red.SIGNET, ahora)
+        val p = Emparejamiento.analizar(paquete(huellaCampo = "\"${huella.uppercase()}\"", tunel = tunelOk), redActiva, ahora)
         assertEquals(huella, p.huellaSpki)
         val t = p.tunel!!
         assertEquals(clavePublica, t.clavePublicaNodo)
@@ -74,7 +76,7 @@ class EmparejamientoTest {
 
     @Test
     fun tcpSinHuellaValido_yConHuellaRechazado() {
-        val p = Emparejamiento.analizar(paquete(electrum = "\"tcp://nodo.local:50001\"", huellaCampo = null), Red.SIGNET, ahora)
+        val p = Emparejamiento.analizar(paquete(electrum = "\"tcp://nodo.local:50001\"", huellaCampo = null), redActiva, ahora)
         assertEquals("", p.huellaSpki)
         assertNull(p.aConfig().huellaServidor)
         assertTrue(rechazo(paquete(electrum = "\"tcp://nodo.local:50001\"")).contains("no debe traer huella"))
@@ -85,10 +87,10 @@ class EmparejamientoTest {
         assertTrue(rechazo(paquete(caduca = "\"2025-12-31T23:59:00Z\"")).contains("caducó"))
         // caduca == ahora también se rechaza (estricto); un segundo después de ahora sigue valiendo.
         assertTrue(rechazo(paquete(caduca = "\"2026-01-01T00:00:00Z\"")).contains("caducó"))
-        Emparejamiento.analizar(paquete(caduca = "\"2026-01-01T00:00:01Z\""), Red.SIGNET, ahora)
+        Emparejamiento.analizar(paquete(caduca = "\"2026-01-01T00:00:01Z\""), redActiva, ahora)
         assertTrue(rechazo(paquete(emitido = "\"2026-01-01T00:06:00Z\"", caduca = "\"2026-01-01T12:00:00Z\"")).contains("futuro"))
         // Hasta 5 min de adelanto se tolera (relojes).
-        Emparejamiento.analizar(paquete(emitido = "\"2026-01-01T00:04:00Z\"", caduca = "\"2026-01-01T12:00:00Z\""), Red.SIGNET, ahora)
+        Emparejamiento.analizar(paquete(emitido = "\"2026-01-01T00:04:00Z\"", caduca = "\"2026-01-01T12:00:00Z\""), redActiva, ahora)
         assertTrue(rechazo(paquete(emitido = "\"2025-12-31T23:00:00Z\"", caduca = "\"2026-01-01T23:00:01Z\"")).contains("más de 24 h"))
         assertTrue(rechazo(paquete(emitido = "\"2025-12-31T23:00:00Z\"", caduca = "\"2025-12-31T23:00:00Z\"")).contains("posterior"))
         assertTrue(rechazo(paquete(emitido = "\"31/12/2025\"")).contains("2026-01-31T12:00:00Z"))
@@ -125,7 +127,7 @@ class EmparejamientoTest {
         }
         // Los de la vuelta anterior siguen rechazándose y los legítimos siguen pasando.
         assertTrue(rechazo(paquete(nombre = "\"copia: $zoo\"")).contains("semilla"))
-        Emparejamiento.analizar(paquete(nombre = "\"nodo de casa, en el salón (2.º piso)\""), Red.SIGNET, ahora)
+        Emparejamiento.analizar(paquete(nombre = "\"nodo de casa, en el salón (2.º piso)\""), redActiva, ahora)
         assertTrue(!Emparejamiento.tieneRachaDePalabras("a.b.c.d.e.f.g.h.i.j.k"))
         assertTrue(Emparejamiento.tieneRachaDePalabras("a.b.c.d.e.f.g.h.i.j.k.l"))
         assertTrue(Emparejamiento.tieneRachaDePalabras("(" + "a ".repeat(7000) + ")"))
@@ -151,7 +153,7 @@ class EmparejamientoTest {
         assertTrue(rechazo(paquete() + "{}").contains("texto sobrante"))
         assertTrue(rechazo(paquete() + "\n// comentario").contains("texto sobrante"))
         // Espacio alrededor sí se tolera.
-        assertEquals("mi nodo", Emparejamiento.analizar("  " + paquete() + "\n", Red.SIGNET, ahora).nombre)
+        assertEquals("mi nodo", Emparejamiento.analizar("  " + paquete() + "\n", redActiva, ahora).nombre)
         // Clave duplicada en la raíz: la segunda «tunel» (null) taparía la primera en el org.json de Android.
         val dup = paquete(tunel = """{"private_key": "x"}""", extra = ", \"tunel\": null")
         assertTrue(rechazo(dup).contains("clave duplicada: «tunel»"))
@@ -160,7 +162,7 @@ class EmparejamientoTest {
         assertTrue(rechazo(paquete(extra = ", \"nom\\u0062re\": \"otro\"")).contains("clave duplicada: «nombre»"))
         // JSON permisivo que org.json aceptaría: claves sin comillas, comillas simples, comentarios, coma final.
         assertTrue(rechazo(paquete().replace("\"v\": 1", "v: 1")).contains("JSON inválido"))
-        assertTrue(rechazo(paquete().replace("\"signet\"", "'signet'")).contains("JSON inválido"))
+        assertTrue(rechazo(paquete().replace("\"$nombreRedActiva\"", "'$nombreRedActiva'")).contains("JSON inválido"))
         assertTrue(rechazo(paquete().replace("\"v\": 1", "/* x */ \"v\": 1")).contains("JSON inválido"))
         assertTrue(rechazo(paquete().dropLast(1) + ",}").contains("JSON inválido"))
         assertTrue(rechazo(paquete().replace("\"v\": 1", "\"v\": 01")).contains("JSON inválido"))
@@ -177,8 +179,8 @@ class EmparejamientoTest {
         // Y en el endpoint del túnel.
         assertTrue(rechazo(paquete(tunel = """{"clave_publica_nodo": "$clavePublica", "endpoint": "$wif.ejemplo.local:51820", "ips_permitidas": ["127.0.0.1/32"]}""")).contains("clave privada"))
         // Límites: un WIF «pegado» a más base58 no es un WIF; un host normal largo no dispara nada.
-        Emparejamiento.analizar(paquete(nombre = "\"${wif}abc\""), Red.SIGNET, ahora)
-        Emparejamiento.analizar(paquete(electrum = "\"ssl://servidor-electrum-de-casa.nodo.ejemplo.local:50002\""), Red.SIGNET, ahora)
+        Emparejamiento.analizar(paquete(nombre = "\"${wif}abc\""), redActiva, ahora)
+        Emparejamiento.analizar(paquete(electrum = "\"ssl://servidor-electrum-de-casa.nodo.ejemplo.local:50002\""), redActiva, ahora)
     }
 
     @Test
@@ -195,19 +197,23 @@ class EmparejamientoTest {
         assertTrue(!Emparejamiento.ipv6Valida("::ffff:192.0.2.300"))
         assertTrue(!Emparejamiento.ipv6Valida("nodo.ejemplo.local"))
         // En host:puerto con corchetes y en redes permitidas.
-        Emparejamiento.analizar(paquete(electrum = "\"ssl://[fd00::1]:50002\""), Red.SIGNET, ahora)
+        Emparejamiento.analizar(paquete(electrum = "\"ssl://[fd00::1]:50002\""), redActiva, ahora)
         assertTrue(rechazo(paquete(electrum = "\"ssl://[::::]:50002\"")).contains("no es una dirección IPv6"))
         assertTrue(rechazo(paquete(electrum = "\"ssl://fd00::1:50002\"")).contains("entre corchetes"))
         assertTrue(rechazo(paquete(electrum = "\"ssl://300.1.1.1:50002\"")).contains("no es una dirección IPv4"))
-        Emparejamiento.analizar(paquete(tunel = """{"clave_publica_nodo": "$clavePublica", "endpoint": "[fd00::2]:51820", "ips_permitidas": ["::ffff:192.0.2.1/128", "fd00::/64"]}"""), Red.SIGNET, ahora)
+        Emparejamiento.analizar(paquete(tunel = """{"clave_publica_nodo": "$clavePublica", "endpoint": "[fd00::2]:51820", "ips_permitidas": ["::ffff:192.0.2.1/128", "fd00::/64"]}"""), redActiva, ahora)
         assertTrue(rechazo(paquete(tunel = """{"clave_publica_nodo": "$clavePublica", "endpoint": "n:1", "ips_permitidas": ["::::/64"]}""")).contains("no es una red válida"))
     }
 
     @Test
     fun otraRed_redDesconocida_yMainnet() {
-        assertTrue(rechazo(paquete(), Red.REGTEST).contains("el paquete es de signet y la billetera es de regtest"))
+        if (Redes.permitida(Red.MAINNET)) {
+            assertTrue(rechazo(paquete(red = "\"signet\"")).contains("no permitida"))
+        } else {
+            assertTrue(rechazo(paquete(), Red.REGTEST).contains("el paquete es de signet y la billetera es de regtest"))
+            assertTrue(rechazo(paquete(red = "\"mainnet\"")).contains("no permitida"))
+        }
         assertTrue(rechazo(paquete(red = "\"liquid\"")).contains("red desconocida"))
-        assertTrue(rechazo(paquete(red = "\"mainnet\"")).contains("no permitida"))
     }
 
     @Test
@@ -237,7 +243,7 @@ class EmparejamientoTest {
             assertTrue("$tipo → $m", m.contains("clave privada") && m.contains("se rechaza entero") && m.contains(if (tipo == "campo") "campo" else "valor"))
         }
         // Un nombre normal con pocas palabras no dispara el detector de semillas.
-        Emparejamiento.analizar(paquete(nombre = "\"nodo de casa en el salón\""), Red.SIGNET, ahora)
+        Emparejamiento.analizar(paquete(nombre = "\"nodo de casa en el salón\""), redActiva, ahora)
     }
 
     @Test
@@ -264,7 +270,7 @@ class EmparejamientoTest {
         assertTrue(rechazo(paquete(tunel = t(movil = "\"casa\""))).contains("direccion_movil"))
         assertTrue(rechazo(paquete(tunel = "\"si\"")).contains("debe ser un objeto"))
         // IPv6 permitida con prefijo válido.
-        Emparejamiento.analizar(paquete(tunel = t(ips = "[\"fd00::/64\"]")), Red.SIGNET, ahora)
+        Emparejamiento.analizar(paquete(tunel = t(ips = "[\"fd00::/64\"]")), redActiva, ahora)
     }
 
     @Test

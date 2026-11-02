@@ -22,8 +22,15 @@ UNIFFI_VERSION="0.32.2"          # también en rust/Cargo.toml (=0.32.2)
 PLATFORM="21"                    # minSdk de la app y de la biblioteca
 ABI="arm64-v8a"
 TARGET="aarch64-linux-android"
-MARCADOR_OK="x39wallet-redes=solo-prueba"   # ver REDES_PERMITIDAS en rust/src/lib.rs
-MARCADOR_MAL="x39wallet-redes=mainnet"
+if [ "${X39_MAINNET:-0}" = "1" ]; then
+    MARCADOR_OK="x39wallet-redes=mainnet"
+    MARCADOR_MAL="x39wallet-redes=solo-prueba"
+    CARGO_FEATURES="--features mainnet"
+else
+    MARCADOR_OK="x39wallet-redes=solo-prueba"   # ver REDES_PERMITIDAS en rust/src/lib.rs
+    MARCADOR_MAL="x39wallet-redes=mainnet"
+    CARGO_FEATURES=""
+fi
 
 MODO="${1:-}"
 case "$MODO" in ""|--actualizar|--verificar|--autoprueba) ;; *) echo "modo desconocido: $MODO" >&2; exit 2;; esac
@@ -144,7 +151,7 @@ export RUSTFLAGS="--remap-path-prefix=$HOME=/build --remap-path-prefix=$RAIZ=/bu
 rm -rf "$SALIDA_JNI/$ABI"
 mkdir -p "$SALIDA_JNI" "$SALIDA_KT"
 echo "== cargo ndk --platform $PLATFORM -t $ABI build --release --locked"
-cargo ndk --platform "$PLATFORM" -t "$ABI" -o "$SALIDA_JNI" build --release --locked
+cargo ndk --platform "$PLATFORM" -t "$ABI" -o "$SALIDA_JNI" build --release --locked $CARGO_FEATURES
 SO="$SALIDA_JNI/$ABI/libx39wallet.so"
 [ -f "$SO" ] || fallo "no se generó $SO"
 

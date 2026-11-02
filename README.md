@@ -25,15 +25,18 @@ a paso, límites conocidos). Lo que ya está decidido y probado se recoge en `PR
 - **Borrado de memoria**: lo que el motor controla (semilla de 64 bytes, descriptores con
   clave privada, mnemónico analizado) va en `Zeroizing`. Las copias internas de miniscript y
   secp256k1 no se pueden borrar desde el motor. En Android no se puede garantizar el borrado
-  de los búferes intermedios de UniFFI ni de las vistas; se minimiza así: el mnemónico cruza
+  de las copias internas de la máquina virtual ni de las vistas; el mnemónico cruza
   a Rust como `ByteBuffer` directo que Kotlin pone a cero en un `finally`, nunca como
   `String`.
-- **Semilla nueva**: al devolver `nueva_semilla`, UniFFI deja dos copias en memoria nativa
-  que no se ponen a cero (el `Vec` que se entrega al serializador y el `RustBuffer` que
-  Kotlin libera sin borrar); la copia `Zeroizing` del motor sí se borra; Kotlin pone a cero
-  su `ByteArray` en cuanto lo ha mostrado y cifrado. Trabajo futuro: implementar `Lower` a
-  mano para un tipo `Semilla` que escriba directamente en el búfer de salida (dejaría una
-  sola copia, la de UniFFI).
+- **Semilla nueva**: `nueva_semilla` devuelve un objeto opaco cuyo bloque original está
+  en `Zeroizing`. UniFFI transmite un identificador, no las palabras serializadas. Kotlin
+  recoge los bytes con retornos escalares y, en un `finally`, pone a cero el bloque nativo
+  con `borrar()` y cierra el objeto; incluso si la lectura se interrumpe. No existe un
+  `RustBuffer` con la semilla ni un `Vec` temporal entregado al serializador. Cerrar el
+  último identificador también activa `Zeroizing`. `SemillaNueva` borra después el
+  `ByteArray` Kotlin al cerrar; ante un error durante la recogida lo borra antes de propagar
+  el error. Esto cubre los bloques controlados, no registros del procesador, copias de la
+  máquina virtual, vistas ni otras bibliotecas.
 - **Clave del Keystore**: la semilla se cifra con una clave que exige autenticación por
   operación (biometría fuerte o credencial del aparato en Android 11+). Con la credencial del
   aparato admitida, un cambio de biometría no invalida la clave; la invalidación que se

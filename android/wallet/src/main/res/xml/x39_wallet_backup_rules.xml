@@ -4,4 +4,7 @@
     <exclude domain="file" path="x39-wallet" />
     <exclude domain="database" path="x39-wallet" />
     <exclude domain="sharedpref" path="x39-wallet.xml" />
+    <exclude domain="file" path="x39-wallet-mainnet" />
+    <exclude domain="database" path="x39-wallet-mainnet" />
+    <exclude domain="sharedpref" path="x39-wallet-mainnet.xml" />
 </full-backup-content>

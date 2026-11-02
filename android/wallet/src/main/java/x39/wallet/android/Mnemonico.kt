@@ -4,6 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.CharBuffer
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
+import x39.wallet.SemillaGenerada
 
 /**
  * Mnemónico BIP39 en memoria NATIVA, listo para cruzar a Rust sin copias.
@@ -104,15 +105,49 @@ class Mnemonico private constructor(private val buf: ByteBuffer) : AutoCloseable
 }
 
 /**
- * Semilla recién generada por el motor (`nuevaSemilla()`), que llega como `ByteArray`.
- * Se muestra UNA vez, se cifra, y se borra. Ver la limitación en `rust/src/ffi.rs`: de este
- * valor quedan dos copias nativas de UniFFI sin borrar; esta clase borra la suya.
+ * Semilla recién generada por el motor. Su objeto nativo se consume y borra antes de
+ * devolver esta instancia; los bytes escalares no pasan por el serializador de UniFFI.
+ * La copia Kotlin se muestra una vez, se cifra y se borra al cerrar esta instancia.
  *
  * PARA LAS PANTALLAS (fase F): [palabras] se pinta con `TextView.setText(char[], 0, n)`,
  * nunca como `String`; el `CharArray` se pone a cero al salir de la pantalla (y la pantalla
  * lleva FLAG_SECURE). Tras cifrar con [AlmacenSemilla], `close()`.
  */
 class SemillaNueva(private val bytes: ByteArray) : AutoCloseable {
+
+    /** Recoge la salida nativa y la borra incluso si falla la lectura de algún byte. */
+    constructor(nativa: SemillaGenerada) : this(extraerYBorrar(nativa))
+
+    companion object {
+        internal fun extraerYBorrar(nativa: SemillaGenerada, destino: ((Int) -> ByteArray)? = null): ByteArray {
+            var salida: ByteArray? = null
+            try {
+                val n = nativa.longitud().toInt()
+                require(n in 1..256) { "longitud de semilla no válida" }
+                val buf = destino?.invoke(n) ?: ByteArray(n)
+                salida = buf
+                for (i in buf.indices) buf[i] = nativa.byteEn(i.toUInt()).toByte()
+                return buf
+            } catch (e: Throwable) {
+                salida?.fill(0)
+                throw e
+            } finally {
+                try {
+                    nativa.borrar()
+                } catch (e: Throwable) {
+                    salida?.fill(0)
+                    throw e
+                } finally {
+                    try {
+                        nativa.close()
+                    } catch (e: Throwable) {
+                        salida?.fill(0)
+                        throw e
+                    }
+                }
+            }
+        }
+    }
 
     @Volatile
     private var cerrada = false

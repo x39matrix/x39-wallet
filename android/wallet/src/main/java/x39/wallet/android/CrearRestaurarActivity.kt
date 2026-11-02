@@ -51,7 +51,7 @@ class CrearRestaurarActivity : BaseActivity() {
         limpiar()
         col.removeAllViews()
         col.addView(cabecera("Billetera Bitcoin"))
-        col.addView(Estilo.texto(this, "Red: ${repo.ajustes.red.name.lowercase()} (cámbiala en Ajustes antes de crear). Esta edición solo admite redes de prueba.", 12f, Estilo.gris))
+        col.addView(Estilo.texto(this, "Red: ${repo.ajustes.red.name.lowercase()} (cámbiala en Ajustes antes de crear).", 12f, Estilo.gris))
         if (!repo.ajustes.hayServidor()) col.addView(Estilo.texto(this, "⚠ Sin servidor Electrum configurado: podrás crear la billetera, pero no sincronizar hasta ponerlo en Ajustes.", 12f, Estilo.aviso))
         col.addView(Estilo.boton(this, "Crear billetera nueva") { crear() })
         col.addView(Estilo.boton(this, "Restaurar desde 12 palabras", principal = false) { restaurar() })

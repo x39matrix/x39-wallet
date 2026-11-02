@@ -5,11 +5,11 @@ import android.content.SharedPreferences
 import x39.wallet.Red
 
 /**
- * Ajustes de la billetera (SharedPreferences `x39-wallet`, excluidas de las copias de
- * seguridad). El servidor Electrum lo elige el usuario; vacío por defecto: sin servidor no
+ * Ajustes de la billetera, separados por edición y excluidos de las copias de seguridad.
+ * El servidor Electrum lo elige el usuario; vacío por defecto: sin servidor no
  * hay red. Nada del mnemónico pasa por aquí.
  */
-class Ajustes(context: Context, nombrePrefs: String = "x39-wallet") : AlmacenConfigNodo {
+class Ajustes(context: Context, nombrePrefs: String = PerfilBilletera.actual.preferencias) : AlmacenConfigNodo {
 
     override fun leer(): ConfigNodo? = configNodo()
     private val CLAVES_NODO = listOf(CLAVE_SERVIDOR, CLAVE_HUELLA, CLAVE_TUNEL, CLAVE_NOMBRE_NODO, CLAVE_TUNEL_CLAVE_NODO, CLAVE_TUNEL_ENDPOINT, CLAVE_TUNEL_IPS, CLAVE_TUNEL_MOVIL)
@@ -62,7 +62,11 @@ class Ajustes(context: Context, nombrePrefs: String = "x39-wallet") : AlmacenCon
 
     /** Red de la billetera; solo cambia antes de crearla. */
     var red: Red
-        get() = Red.valueOf(prefs.getString(CLAVE_RED, Red.SIGNET.name) ?: Red.SIGNET.name)
+        get() {
+            val defecto = Redes.porDefecto()
+            val guardada = prefs.getString(CLAVE_RED, defecto.name)?.let { runCatching { Red.valueOf(it) }.getOrNull() }
+            return if (guardada != null && Redes.permitida(guardada)) guardada else defecto
+        }
         set(v) {
             Redes.exigir(v)
             prefs.edit().putString(CLAVE_RED, v.name).apply()

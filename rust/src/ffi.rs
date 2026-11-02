@@ -12,18 +12,21 @@
 //!   Rust lo recibe prestado solo durante la llamada y lo que el motor controla (semilla de
 //!   64 bytes, descriptores con clave privada, mnemónico analizado) va en `Zeroizing`.
 //! * Nunca `String` ni `CharSequence` con el mnemónico en ninguno de los dos lados.
-//! * LIMITACIÓN de `nueva_semilla`: al devolver la semilla nueva, UniFFI deja DOS copias en
-//!   memoria nativa que no se ponen a cero: el `Vec<u8>` que se entrega al serializador y el
-//!   `RustBuffer` que Kotlin libera sin borrar. La copia `Zeroizing` del motor sí se borra.
-//!   Kotlin pone a cero su `ByteArray` en cuanto lo ha mostrado y cifrado. Misma redacción
-//!   en el README. Trabajo futuro: implementar `Lower` a mano para un tipo `Semilla` que
-//!   escriba directamente en el búfer de salida (dejaría una sola copia, la de UniFFI).
+//! * La semilla nueva se devuelve como objeto opaco `SemillaGenerada`: UniFFI solo cruza
+//!   su identificador. Android recoge sus bytes mediante retornos escalares y llama a
+//!   `borrar` en un `finally`, antes de cerrar el objeto. El mnemónico completo nunca se
+//!   serializa en un `Vec` temporal ni en un `RustBuffer` de UniFFI. El bloque original
+//!   permanece en `Zeroizing` y el borrado explícito invalida también otros identificadores
+//!   que pudieran compartir el objeto. Kotlin borra su `ByteArray` al cerrar `SemillaNueva`.
+//! * Esto cubre los bloques que controlamos, no las copias de la máquina virtual, las
+//!   vistas de Android, los registros del procesador ni las bibliotecas criptográficas.
 //!
-//! Mainnet queda prohibida en esta capa igual que en el motor (feature `mainnet` no activa).
+//! Mainnet solo se habilita en esta capa y en el motor cuando se compila con `--features mainnet`; sin esa feature queda prohibida.
 
 use crate as motor;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use zeroize::{Zeroize, Zeroizing};
 
 pub use motor::{EnvioInfo, Error, EstadoEnvio, Movimiento, NodoInfo, PsbtPendiente, Red, Saldo};
 
@@ -40,13 +43,59 @@ pub fn version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
-/// Mnemónico nuevo de 12 palabras como bytes UTF-8. Ver la LIMITACIÓN en la cabecera: de
-/// este valor quedan dos copias nativas sin borrar (la que se entrega aquí al serializador
-/// de UniFFI y el RustBuffer que Kotlin libera).
+/// Mnemónico nuevo de 12 palabras. El retorno es un identificador opaco, no una
+/// serialización de las palabras. El llamador debe invocar `borrar` antes de cerrar.
 #[uniffi::export]
-pub fn nueva_semilla() -> Result<Vec<u8>, Error> {
-    let s = motor::nueva_semilla()?; // Zeroizing: esta copia sí se borra
-    Ok(s.to_vec())
+pub fn nueva_semilla() -> Result<Arc<SemillaGenerada>, Error> {
+    Ok(Arc::new(SemillaGenerada {
+        interior: Mutex::new(ContenidoSemilla {
+            bytes: motor::nueva_semilla()?,
+            cerrada: false,
+        }),
+    }))
+}
+
+struct ContenidoSemilla {
+    bytes: Zeroizing<Vec<u8>>,
+    cerrada: bool,
+}
+
+/// Salida temporal del generador. La semilla permanece en su bloque nativo protegido
+/// hasta `borrar`; al destruir el objeto `Zeroizing` vuelve a borrar su almacenamiento.
+#[derive(uniffi::Object)]
+pub struct SemillaGenerada {
+    interior: Mutex<ContenidoSemilla>,
+}
+
+#[uniffi::export]
+impl SemillaGenerada {
+    /// Número de bytes UTF-8 disponibles; cero una vez borrada.
+    pub fn longitud(&self) -> u32 {
+        let s = self.interior.lock().unwrap_or_else(|p| p.into_inner());
+        if s.cerrada {
+            0
+        } else {
+            s.bytes.len() as u32
+        }
+    }
+
+    /// Un byte escalar: no se crea un búfer de serialización con la semilla.
+    /// Rechaza un índice fuera de rango o un objeto ya borrado.
+    pub fn byte_en(&self, indice: u32) -> Result<u8, Error> {
+        let s = self.interior.lock().unwrap_or_else(|p| p.into_inner());
+        if s.cerrada {
+            return Err(Error::Semilla);
+        }
+        s.bytes.get(indice as usize).copied().ok_or(Error::Semilla)
+    }
+
+    /// Borra el contenido en el mismo bloque y prohíbe volver a leerlo. Idempotente;
+    /// también afecta a cualquier otro identificador que comparta este objeto.
+    pub fn borrar(&self) {
+        let mut s = self.interior.lock().unwrap_or_else(|p| p.into_inner());
+        s.bytes.as_mut_slice().zeroize();
+        s.cerrada = true;
+    }
 }
 
 /// Marcador de redes de ESTA compilación de la biblioteca, para que la app lo muestre y
@@ -229,5 +278,43 @@ impl Billetera {
     /// El envío sin resolver que bloquea construir otro, si lo hay.
     pub fn envio_en_curso(&self) -> Option<EnvioInfo> {
         self.con(|b| b.envio_en_curso())
+    }
+}
+
+#[cfg(test)]
+mod pruebas_semilla_generada {
+    use super::*;
+
+    #[test]
+    fn semilla_generada_valida_y_borrada_en_el_bloque_original() {
+        let semilla = nueva_semilla().unwrap();
+        let longitud = semilla.longitud();
+        let copia = Zeroizing::new(
+            (0..longitud)
+                .map(|i| semilla.byte_en(i).unwrap())
+                .collect::<Vec<_>>(),
+        );
+        let palabras = std::str::from_utf8(&copia).unwrap();
+        assert_eq!(palabras.split_ascii_whitespace().count(), 12);
+        assert!(bip39::Mnemonic::parse(palabras).is_ok());
+        assert!(matches!(semilla.byte_en(longitud), Err(Error::Semilla)));
+        let direccion = semilla.interior.lock().unwrap().bytes.as_ptr();
+        semilla.borrar();
+        let contenido = semilla.interior.lock().unwrap();
+        // Observación válida ANTES de liberar: sigue siendo el mismo bloque, ahora a cero.
+        assert_eq!(contenido.bytes.as_ptr(), direccion);
+        assert_eq!(contenido.bytes.len(), longitud as usize);
+        assert!(contenido.bytes.iter().all(|b| *b == 0));
+    }
+
+    #[test]
+    fn semilla_generada_borrar_invalida_todos_los_identificadores() {
+        let semilla = nueva_semilla().unwrap();
+        let otro_identificador = Arc::clone(&semilla);
+        assert!(otro_identificador.longitud() > 0);
+        semilla.borrar();
+        semilla.borrar();
+        assert_eq!(otro_identificador.longitud(), 0);
+        assert!(matches!(otro_identificador.byte_en(0), Err(Error::Semilla)));
     }
 }
