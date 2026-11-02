@@ -4,6 +4,7 @@ import android.os.Build
 import androidx.annotation.RequiresApi
 import android.content.Intent
 import android.os.Bundle
+import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.lifecycle.lifecycleScope
@@ -20,6 +21,8 @@ class BilleteraActivity : BaseActivity() {
     private lateinit var detalle: TextView
     private lateinit var redTxt: TextView
     private lateinit var banner: LinearLayout
+    private lateinit var panelPi5: LinearLayout
+    private lateinit var txtPi5: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -31,8 +34,32 @@ class BilleteraActivity : BaseActivity() {
         redTxt = Estilo.texto(this, "", 11f, Estilo.tenue)
         tarjeta.addView(saldo); tarjeta.addView(detalle); tarjeta.addView(redTxt)
         col.addView(tarjeta)
-        banner = Estilo.tarjeta(this).apply { visibility = android.view.View.GONE }
+        banner = Estilo.tarjeta(this).apply { visibility = View.GONE }
         col.addView(banner)
+
+        // Panel desplegable de Telemetría y Control Pi 5
+        panelPi5 = Estilo.tarjeta(this).apply { visibility = View.GONE }
+        txtPi5 = Estilo.texto(this, "Consultando Pi 5…", 12f, Estilo.gris)
+        panelPi5.addView(txtPi5)
+        val filaPi5 = Estilo.fila(this)
+        filaPi5.addView(Estilo.boton(this, "Refrescar", principal = false) { cargarTelemetriaPi5() }.apply {
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = Estilo.dp(this@BilleteraActivity, 4) }
+        })
+        filaPi5.addView(Estilo.boton(this, "Reiniciar Pool", principal = false) {
+            lanzar {
+                txtPi5.text = "Reiniciando CKPool en Pi 5…"
+                val msg = TelemetriaPi5.reiniciarPool()
+                aviso(msg)
+                cargarTelemetriaPi5()
+            }
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { leftMargin = Estilo.dp(this@BilleteraActivity, 4) }
+        })
+        panelPi5.addView(filaPi5)
+        // Panel web de la Pi 5 (:3000) en el navegador, en la IP que responda (túnel o LAN).
+        panelPi5.addView(Estilo.boton(this, "Abrir panel web de la Pi 5 (:3000)", principal = false) { abrirPanelPi5() })
+        col.addView(panelPi5)
+
         val fila = Estilo.fila(this)
         fila.addView(Estilo.boton(this, "Recibir") { startActivity(Intent(this, RecibirActivity::class.java)) }.apply {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = Estilo.dp(this@BilleteraActivity, 5) }
@@ -43,6 +70,14 @@ class BilleteraActivity : BaseActivity() {
         col.addView(fila)
         col.addView(Estilo.boton(this, "Historial y envíos", principal = false) { startActivity(Intent(this, HistorialActivity::class.java)) })
         col.addView(Estilo.boton(this, "Sincronizar", principal = false) { lanzar { repo.sincronizar() } })
+        col.addView(Estilo.boton(this, "Minería y Nodo Pi 5 (Pool / Avisos)", principal = false) {
+            if (panelPi5.visibility == View.VISIBLE) {
+                panelPi5.visibility = View.GONE
+            } else {
+                panelPi5.visibility = View.VISIBLE
+                cargarTelemetriaPi5()
+            }
+        })
         col.addView(Estilo.boton(this, "Emparejar con mi nodo (QR o fichero)", principal = false) { startActivity(Intent(this, EmparejarActivity::class.java)) })
         col.addView(Estilo.boton(this, "Ajustes (servidor Electrum)", principal = false) { startActivity(Intent(this, AjustesActivity::class.java)) })
         col.addView(Estilo.texto(this, "Autocustodia: la semilla vive solo en este aparato, cifrada con su clave. Cada firma pide tu autenticación.", 11f, Estilo.tenue))
@@ -50,6 +85,36 @@ class BilleteraActivity : BaseActivity() {
 
         lifecycleScope.launch { repo.vista.collect { pintar(it) } }
         lifecycleScope.launch { repo.nodo.estado.collect { pintar(repo.vista.value) } }
+    }
+
+    /**
+     * Abre el panel web de la Pi 5 en el navegador con la IP que responde de verdad (sonda TCP).
+     * Si ninguna contesta o no hay navegador: aviso, nunca una pestaña en blanco ni una caída.
+     */
+    private fun abrirPanelPi5() {
+        lanzar {
+            val url = TelemetriaPi5.urlPanel(this@BilleteraActivity)
+            if (url == null) {
+                aviso("La Pi 5 no responde en :${TelemetriaPi5.PUERTO_PANEL} ni por el túnel (${TelemetriaPi5.IP_VPN}) ni por la LAN (${TelemetriaPi5.IP_LAN})")
+                return@lanzar
+            }
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+            } catch (_: android.content.ActivityNotFoundException) {
+                aviso("No hay navegador para abrir $url")
+            }
+        }
+    }
+
+    private fun cargarTelemetriaPi5() {
+        lanzar {
+            txtPi5.text = "Conectando con Raspberry Pi 5…"
+            try {
+                txtPi5.text = TelemetriaPi5.consultar()
+            } catch (e: Exception) {
+                txtPi5.text = "⚠ ${e.message ?: "Error al conectar con Pi 5"}"
+            }
+        }
     }
 
     override fun onPause() {
@@ -96,8 +161,8 @@ class BilleteraActivity : BaseActivity() {
         }
         val e = v.envioEnCurso
         banner.removeAllViews()
-        if (e == null) { banner.visibility = android.view.View.GONE; return }
-        banner.visibility = android.view.View.VISIBLE
+        if (e == null) { banner.visibility = View.GONE; return }
+        banner.visibility = View.VISIBLE
         banner.addView(Estilo.texto(this, "ENVÍO SIN RESOLVER", 12f, Estilo.aviso))
         banner.addView(Estilo.texto(this, "${e.txid.take(16)}… · ${e.estado.texto()}${if (e.motivo.isNotEmpty()) " · ${e.motivo}" else ""}", 12f, Estilo.gris))
         banner.addView(Estilo.texto(this, "${Estilo.sat(e.importeSat)} a ${e.destino.take(14)}… · comisión ${Estilo.sat(e.comisionSat)} · intentos ${e.intentosDifusion}", 12f, Estilo.gris))
