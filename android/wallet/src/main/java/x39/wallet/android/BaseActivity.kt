@@ -7,10 +7,12 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import x39.wallet.R
 
 /** Base de las pantallas de la billetera: repositorio, errores a la vista y acceso a la semilla. */
 @RequiresApi(Build.VERSION_CODES.M) // Keystore con autenticación por operación
@@ -31,10 +33,12 @@ abstract class BaseActivity : AppCompatActivity() {
      */
     protected fun cabecera(titulo: String): android.view.View {
         val fila = Estilo.fila(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
+        // De derecha a izquierda (árabe) la flecha apunta al otro lado y el hueco va al lado de lectura.
+        val rtl = resources.configuration.layoutDirection == android.view.View.LAYOUT_DIRECTION_RTL
         val volver = android.widget.TextView(this).apply {
-            text = "\u2190"; textSize = 24f; setTextColor(Estilo.claro)
-            contentDescription = "Volver"
-            setPadding(0, Estilo.dp(this@BaseActivity, 4), Estilo.dp(this@BaseActivity, 16), Estilo.dp(this@BaseActivity, 8))
+            text = if (rtl) "\u2192" else "\u2190"; textSize = 24f; setTextColor(Estilo.claro)
+            contentDescription = getString(R.string.x39w_volver)
+            setPaddingRelative(0, Estilo.dp(this@BaseActivity, 4), Estilo.dp(this@BaseActivity, 16), Estilo.dp(this@BaseActivity, 8))
             setOnClickListener { onBackPressedDispatcher.onBackPressed() }
         }
         fila.addView(volver)
@@ -42,15 +46,33 @@ abstract class BaseActivity : AppCompatActivity() {
         return fila
     }
 
-    /** Ejecuta trabajo suspendido; los errores salen como aviso. */
+    /**
+     * Ejecuta trabajo suspendido; los errores salen como aviso. La cancelación de la corrutina (la
+     * pantalla se va) se relanza y NUNCA se enseña (orden 7, G6: nada de «Job was cancelled»). Sin
+     * `alFallar`, en pantalla solo va el texto de un [ErrorBilletera] (ya traducido para la
+     * pantalla); cualquier otra excepción se muestra con un texto fijo y su clase (sin mensaje) va
+     * al registro.
+     */
     protected fun lanzar(alFallar: ((Throwable) -> Unit)? = null, bloque: suspend () -> Unit) {
         lifecycleScope.launch {
             try {
                 bloque()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Throwable) {
-                if (alFallar != null) alFallar(e) else aviso(e.message ?: e.javaClass.simpleName)
+                if (alFallar != null) alFallar(e) else aviso(textoDeFallo(e))
             }
         }
+    }
+
+    /**
+     * Texto de pantalla de un fallo: el de la billetera (mensaje interno traducido al pintar), o uno
+     * fijo; nunca el mensaje crudo de otra excepción.
+     */
+    protected fun textoDeFallo(e: Throwable): String {
+        if (e is ErrorBilletera) return e.message?.let { textoPantalla(it) } ?: getString(R.string.x39w_fallo_generico)
+        try { android.util.Log.w(NodeBridgeImpl.ETIQUETA_REGISTRO, "operación fallida: ${e.javaClass.simpleName}") } catch (_: RuntimeException) { }
+        return getString(R.string.x39w_fallo_generico)
     }
 
     /**
@@ -66,10 +88,10 @@ abstract class BaseActivity : AppCompatActivity() {
         } catch (e: ClaveInvalidadaException) {
             claveInvalidada(); return
         } catch (e: Exception) {
-            aviso(e.message ?: "no se pudo preparar el descifrado"); return
+            aviso(e.message?.let { textoPantalla(it) } ?: getString(R.string.x39w_no_preparar_descifrado)); return
         }
         Autenticacion.pedir(
-            this, cipher, titulo, subtitulo, "Cancelar",
+            this, cipher, titulo, subtitulo, getString(R.string.x39w_cancelar),
             alAutenticar = { c ->
                 lanzar {
                     val m = withContext(NonCancellable) { withContext(Dispatchers.IO) { repo.almacen.leer(c) } }
@@ -80,7 +102,7 @@ abstract class BaseActivity : AppCompatActivity() {
                     }
                 }
             },
-            alAbortar = { _, msg -> aviso("Operación cancelada: $msg") },
+            alAbortar = { _, msg -> aviso(getString(R.string.x39w_operacion_cancelada, textoPantalla(msg.toString()))) },
         )
     }
 
@@ -98,14 +120,14 @@ abstract class BaseActivity : AppCompatActivity() {
         } catch (e: ClaveInvalidadaException) {
             mnemonico.close(); claveInvalidada(); return
         } catch (e: IllegalStateException) {
-            mnemonico.close(); aviso("Hace falta una pantalla de bloqueo configurada en el aparato"); return
+            mnemonico.close(); aviso(getString(R.string.x39w_pantalla_bloqueo)); return
         } catch (e: Exception) {
-            mnemonico.close(); aviso(e.message ?: "no se pudo preparar el cifrado"); return
+            mnemonico.close(); aviso(e.message?.let { textoPantalla(it) } ?: getString(R.string.x39w_no_preparar_cifrado)); return
         }
         Autenticacion.pedir(
-            this, cipher, "Proteger la semilla", "Se cifra con la clave de este aparato", "Cancelar",
+            this, cipher, getString(R.string.x39w_proteger_semilla), getString(R.string.x39w_proteger_semilla_sub), getString(R.string.x39w_cancelar),
             alAutenticar = { c ->
-                lanzar(alFallar = { e -> mnemonico.close(); aviso(e.message ?: e.javaClass.simpleName) }) {
+                lanzar(alFallar = { e -> mnemonico.close(); aviso(e.message?.let { textoPantalla(it) } ?: e.javaClass.simpleName) }) {
                     try {
                         withContext(NonCancellable) { withContext(Dispatchers.IO) { repo.almacen.guardar(c, mnemonico) } }
                         despues()
@@ -114,25 +136,22 @@ abstract class BaseActivity : AppCompatActivity() {
                     }
                 }
             },
-            alAbortar = { _, msg -> mnemonico.close(); aviso("Operación cancelada: $msg") },
+            alAbortar = { _, msg -> mnemonico.close(); aviso(getString(R.string.x39w_operacion_cancelada, textoPantalla(msg.toString()))) },
         )
     }
 
     /** La clave del Keystore ya no sirve: NO se borra nada; se recupera con las 12 palabras. */
     protected fun claveInvalidada() {
         AlertDialog.Builder(this)
-            .setTitle("Clave invalidada")
-            .setMessage(
-                "La clave que protegía la semilla ya no sirve (se perdió o se reinició el almacén de claves del aparato). " +
-                    "La billetera y sus envíos se conservan: escribe las 12 palabras para volver a protegerla con una clave nueva.",
-            )
-            .setPositiveButton("Escribir las 12 palabras") { _, _ ->
+            .setTitle(getString(R.string.x39w_clave_invalidada_titulo))
+            .setMessage(getString(R.string.x39w_clave_invalidada_msg))
+            .setPositiveButton(getString(R.string.x39w_escribir_12)) { _, _ ->
                 startActivity(
                     android.content.Intent(this@BaseActivity, CrearRestaurarActivity::class.java)
                         .putExtra(CrearRestaurarActivity.EXTRA_RECUPERAR_CLAVE, true),
                 )
             }
-            .setNegativeButton("Ahora no", null)
+            .setNegativeButton(getString(R.string.x39w_ahora_no), null)
             .show()
     }
 }

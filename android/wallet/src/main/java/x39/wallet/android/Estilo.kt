@@ -16,15 +16,15 @@ import androidx.appcompat.widget.AppCompatEditText
 
 /** Paleta y piezas de interfaz (vistas programáticas, misma estética oscura que la app). */
 object Estilo {
-    val fondo = Color.parseColor("#0E0E10")
-    val grafito = Color.parseColor("#141414")
-    val sup2 = Color.parseColor("#26262B")
-    val claro = Color.parseColor("#F2F2F2")
-    val gris = Color.parseColor("#8A8A8A")
-    val tenue = Color.parseColor("#5F5F66")
-    val aviso = Color.parseColor("#E0A030")
-    val peligro = Color.parseColor("#D85050")
-    val ok = Color.parseColor("#4CAF50")
+    val fondo = Color.parseColor("#090A0D")
+    val grafito = Color.parseColor("#090A0D")
+    val sup2 = Color.parseColor("#12141A")
+    val claro = Color.parseColor("#FFFFFF")
+    val gris = Color.parseColor("#A0AAB8")
+    val tenue = Color.parseColor("#A0AAB8")
+    val aviso = Color.parseColor("#FFB703")
+    val peligro = Color.parseColor("#FF1E1E")
+    val ok = Color.parseColor("#F7931A")
 
     fun dp(c: Context, v: Int): Int = (v * c.resources.displayMetrics.density).toInt()
 
@@ -57,7 +57,7 @@ object Estilo {
     fun tarjeta(c: Context): LinearLayout = LinearLayout(c).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(c, 14), dp(c, 12), dp(c, 14), dp(c, 12))
-        background = GradientDrawable().apply { setColor(grafito); cornerRadius = dp(c, 12).toFloat() }
+        background = GradientDrawable().apply { setColor(Color.parseColor("#12141A")); setStroke(dp(c, 1), Color.parseColor("#492327")); cornerRadius = dp(c, 12).toFloat() }
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             bottomMargin = dp(c, 10)
         }
@@ -65,10 +65,10 @@ object Estilo {
 
     fun boton(c: Context, t: String, principal: Boolean = true, onClick: () -> Unit): TextView = TextView(c).apply {
         text = t; textSize = 15f; gravity = Gravity.CENTER
-        setTextColor(if (principal) grafito else claro)
+        setTextColor(claro)
         setTypeface(typeface, Typeface.BOLD)
         setPadding(dp(c, 16), dp(c, 13), dp(c, 16), dp(c, 13))
-        background = GradientDrawable().apply { setColor(if (principal) claro else sup2); cornerRadius = dp(c, 10).toFloat() }
+        background = GradientDrawable().apply { setColor(if (principal) Color.parseColor("#FF1E1E") else sup2); cornerRadius = dp(c, 10).toFloat() }
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             topMargin = dp(c, 8)
         }

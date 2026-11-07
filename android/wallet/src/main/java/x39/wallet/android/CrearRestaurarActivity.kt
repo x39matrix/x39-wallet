@@ -6,6 +6,7 @@ import android.widget.CheckBox
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.annotation.RequiresApi
+import x39.wallet.R
 
 /**
  * Crear una billetera nueva (12 palabras mostradas UNA vez, confirmación de copia), restaurar
@@ -50,12 +51,12 @@ class CrearRestaurarActivity : BaseActivity() {
     private fun inicio() {
         limpiar()
         col.removeAllViews()
-        col.addView(cabecera("Billetera Bitcoin"))
-        col.addView(Estilo.texto(this, "Red: ${repo.ajustes.red.name.lowercase()} (cámbiala en Ajustes antes de crear).", 12f, Estilo.gris))
-        if (!repo.ajustes.hayServidor()) col.addView(Estilo.texto(this, "⚠ Sin servidor Electrum configurado: podrás crear la billetera, pero no sincronizar hasta ponerlo en Ajustes.", 12f, Estilo.aviso))
-        col.addView(Estilo.boton(this, "Crear billetera nueva") { crear() })
-        col.addView(Estilo.boton(this, "Restaurar desde 12 palabras", principal = false) { restaurar() })
-        col.addView(Estilo.boton(this, "Ajustes", principal = false) { startActivity(android.content.Intent(this, AjustesActivity::class.java)) })
+        col.addView(cabecera(getString(R.string.x39w_crear_titulo)))
+        col.addView(Estilo.texto(this, getString(R.string.x39w_crear_red, repo.ajustes.red.name.lowercase()), 12f, Estilo.gris))
+        if (repo.nodo.config == null) col.addView(Estilo.texto(this, getString(R.string.x39w_crear_sin_nodo), 12f, Estilo.aviso))
+        col.addView(Estilo.boton(this, getString(R.string.x39w_crear_nueva)) { crear() })
+        col.addView(Estilo.boton(this, getString(R.string.x39w_crear_restaurar), principal = false) { restaurar() })
+        col.addView(Estilo.boton(this, getString(R.string.x39w_ajustes), principal = false) { startActivity(android.content.Intent(this, AjustesActivity::class.java)) })
     }
 
     private fun crear() {
@@ -65,8 +66,8 @@ class CrearRestaurarActivity : BaseActivity() {
             val chars = s.palabras()
             palabras = chars
             col.removeAllViews()
-            col.addView(cabecera("Tus 12 palabras"))
-            col.addView(Estilo.texto(this, "Cópialas a mano, en orden, en un lugar seguro. Se muestran UNA sola vez: si sales de esta pantalla desaparecen. Sin ellas no hay forma de recuperar los fondos. No se pueden copiar al portapapeles.", 13f, Estilo.gris))
+            col.addView(cabecera(getString(R.string.x39w_crear_tus_12)))
+            col.addView(Estilo.texto(this, getString(R.string.x39w_crear_copialas), 13f, Estilo.gris))
             val caja = Estilo.tarjeta(this)
             val tv = TextView(this).apply {
                 textSize = 18f; setTextColor(Estilo.claro); setLineSpacing(0f, 1.4f)
@@ -76,27 +77,27 @@ class CrearRestaurarActivity : BaseActivity() {
             }
             caja.addView(tv)
             col.addView(caja)
-            val copiado = CheckBox(this).apply { text = "He copiado las 12 palabras a mano"; setTextColor(Estilo.claro) }
+            val copiado = CheckBox(this).apply { text = getString(R.string.x39w_crear_he_copiado); setTextColor(Estilo.claro) }
             col.addView(copiado)
             val k = (1..12).random()
-            col.addView(Estilo.texto(this, "Comprobación: escribe la palabra número $k", 13f, Estilo.gris))
-            val campo = campoMnemonico("palabra $k")
+            col.addView(Estilo.texto(this, getString(R.string.x39w_crear_comprobacion, k.toString()), 13f, Estilo.gris))
+            val campo = campoMnemonico(getString(R.string.x39w_crear_palabra_k, k.toString()))
             col.addView(campo)
-            col.addView(Estilo.boton(this, "Proteger y crear la billetera") {
-                if (!copiado.isChecked) { aviso("Confirma que has copiado las palabras"); return@boton }
+            col.addView(Estilo.boton(this, getString(R.string.x39w_crear_proteger_crear)) {
+                if (!copiado.isChecked) { aviso(getString(R.string.x39w_crear_confirma_copia)); return@boton }
                 val escrita = campo.tomarChars()
                 val coincide = palabraK(chars, k, escrita)
                 escrita.fill('\u0000')
-                if (!coincide) { aviso("La palabra $k no coincide"); return@boton }
+                if (!coincide) { aviso(getString(R.string.x39w_crear_palabra_no_coincide, k.toString())); return@boton }
                 val m = s.comoMnemonico() // guardarSemilla toma la propiedad y lo cierra
                 guardarSemilla(m) {
                     repo.crear(m, restaurar = false)
                     limpiar()
-                    aviso("Billetera creada")
+                    aviso(getString(R.string.x39w_crear_creada))
                     finish()
                 }
             })
-            col.addView(Estilo.boton(this, "Cancelar", principal = false) { inicio() })
+            col.addView(Estilo.boton(this, getString(R.string.x39w_cancelar), principal = false) { inicio() })
         }
     }
 
@@ -122,43 +123,43 @@ class CrearRestaurarActivity : BaseActivity() {
     private fun restaurar() {
         limpiar()
         col.removeAllViews()
-        col.addView(cabecera("Restaurar"))
-        col.addView(Estilo.texto(this, "Escribe las 12 palabras separadas por espacios. No se puede pegar desde el portapapeles. Tras restaurar hace falta un escaneo completo con tu servidor antes de poder enviar: lo que el servidor muestre volverá como movimientos, pero los envíos firmados o inciertos anteriores no se recuperan desde la semilla.", 13f, Estilo.gris))
-        val campo = campoMnemonico("palabra1 palabra2 … palabra12").apply { minLines = 3 }
+        col.addView(cabecera(getString(R.string.x39w_restaurar_titulo)))
+        col.addView(Estilo.texto(this, getString(R.string.x39w_restaurar_texto), 13f, Estilo.gris))
+        val campo = campoMnemonico(getString(R.string.x39w_restaurar_pista)).apply { minLines = 3 }
         col.addView(campo)
-        col.addView(Estilo.boton(this, "Proteger y restaurar") {
+        col.addView(Estilo.boton(this, getString(R.string.x39w_restaurar_proteger)) {
             val chars = campo.tomarChars()
-            val m = try { Mnemonico.deChars(chars) } catch (e: IllegalArgumentException) { aviso("Texto no válido"); return@boton }
+            val m = try { Mnemonico.deChars(chars) } catch (e: IllegalArgumentException) { aviso(getString(R.string.x39w_texto_no_valido)); return@boton }
             guardarSemilla(m) {
                 val escaneada = repo.crear(m, restaurar = true)
-                aviso(if (escaneada) "Billetera restaurada y escaneada" else "Billetera restaurada; configura el servidor y sincroniza: hará el escaneo completo")
+                aviso(getString(if (escaneada) R.string.x39w_restaurada_escaneada else R.string.x39w_restaurada_sin_escaneo))
                 finish()
             }
         })
-        col.addView(Estilo.boton(this, "Cancelar", principal = false) { campo.tomarChars().fill('\u0000'); inicio() })
+        col.addView(Estilo.boton(this, getString(R.string.x39w_cancelar), principal = false) { campo.tomarChars().fill('\u0000'); inicio() })
     }
 
     /** Clave del Keystore invalidada: palabras → comprobación en el motor → clave nueva → recifrar. Nada se borra. */
     private fun recuperacion() {
         limpiar()
         col.removeAllViews()
-        col.addView(cabecera("Recuperar la clave"))
-        col.addView(Estilo.texto(this, "La billetera y sus envíos se conservan. Escribe las 12 palabras de ESTA billetera: el motor comprueba que coinciden (sin firmar nada) y solo entonces se crea una clave nueva y se vuelve a cifrar la semilla. Si no coinciden o cancelas, todo queda como estaba.", 13f, Estilo.gris))
-        val campo = campoMnemonico("palabra1 palabra2 … palabra12").apply { minLines = 3 }
+        col.addView(cabecera(getString(R.string.x39w_recuperar_titulo)))
+        col.addView(Estilo.texto(this, getString(R.string.x39w_recuperar_texto), 13f, Estilo.gris))
+        val campo = campoMnemonico(getString(R.string.x39w_restaurar_pista)).apply { minLines = 3 }
         col.addView(campo)
-        col.addView(Estilo.boton(this, "Comprobar y proteger") {
+        col.addView(Estilo.boton(this, getString(R.string.x39w_recuperar_comprobar)) {
             val chars = campo.tomarChars()
-            val m = try { Mnemonico.deChars(chars) } catch (e: IllegalArgumentException) { aviso("Texto no válido"); return@boton }
-            lanzar(alFallar = { e -> m.close(); aviso(e.message ?: "error") }) {
+            val m = try { Mnemonico.deChars(chars) } catch (e: IllegalArgumentException) { aviso(getString(R.string.x39w_texto_no_valido)); return@boton }
+            lanzar(alFallar = { e -> m.close(); aviso(e.message?.let { textoPantalla(it) } ?: getString(R.string.x39w_error)) }) {
                 val coincide = repo.coincideSemilla(m)
-                if (!coincide) { m.close(); aviso("Esas palabras no son las de esta billetera; nada ha cambiado"); return@lanzar }
+                if (!coincide) { m.close(); aviso(getString(R.string.x39w_recuperar_no_coinciden)); return@lanzar }
                 guardarSemilla(m, claveNueva = true) {
-                    aviso("Semilla protegida con una clave nueva")
+                    aviso(getString(R.string.x39w_recuperar_protegida))
                     finish()
                 }
             }
         })
-        col.addView(Estilo.boton(this, "Cancelar", principal = false) { campo.tomarChars().fill('\u0000'); finish() })
+        col.addView(Estilo.boton(this, getString(R.string.x39w_cancelar), principal = false) { campo.tomarChars().fill('\u0000'); finish() })
     }
 
     private fun limpiar() {

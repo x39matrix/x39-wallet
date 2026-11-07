@@ -12,6 +12,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import x39.wallet.NodoInfo
@@ -22,7 +23,8 @@ import x39.wallet.Red
 class NodeBridgeCarrerasInstrumentadoTest {
 
     private val ctx = InstrumentationRegistry.getInstrumentation().targetContext
-    private val ajustes = Ajustes(ctx).also { it.red = Red.SIGNET; it.borrarConfigNodo() }
+    // Perezoso: poner signet en una edición mainnet lanza; cada prueba supone antes que signet está permitida.
+    private val ajustes by lazy { Ajustes(ctx).also { it.red = Red.SIGNET; it.borrarConfigNodo() } }
     private val a = ConfigNodo(Red.SIGNET, "ssl://nodo.ejemplo.local:50002", "ab".repeat(32), ModoTunel.NINGUNO, "A")
     private val b = a.copy(electrum = "ssl://candidato.ejemplo.local:50002", nombre = "B")
     private val paqueteB = PaqueteEmparejamiento(Red.SIGNET, b.electrum, "ab".repeat(32), DatosTunel("A".repeat(43) + "=", "nodo.ejemplo.local:51820", listOf("127.0.0.1/32"), null), "B", 0L, 86_400L)
@@ -30,7 +32,7 @@ class NodeBridgeCarrerasInstrumentadoTest {
     private fun info(c: ConfigNodo, altura: UInt) = NodoInfo(c.electrum, "simulado", "1.4", altura, 10uL, true, "ab".repeat(32), Red.SIGNET)
 
     @After
-    fun fin() = ajustes.borrarConfigNodo()
+    fun fin() { if (Redes.permitida(Red.SIGNET)) ajustes.borrarConfigNodo() }
 
     /** Almacén cuyo commit() «devuelve false»: Ajustes.guardar lanza en ese caso, y aquí se reproduce. */
     private class AlmacenQueNoPersiste(private val real: Ajustes) : AlmacenConfigNodo {
@@ -43,6 +45,7 @@ class NodeBridgeCarrerasInstrumentadoTest {
 
     @Test
     fun siCommitDevuelveFalse_noSeAdoptaNiSePublicaSano_yNoQuedaNadaAMedias() = runBlocking {
+        assumeTrue("solo en la edición de prueba (signet); en mainnet no aplica", Redes.permitida(Red.SIGNET))
         val nb = NodeBridgeImpl(AlmacenQueNoPersiste(ajustes), CoroutineScope(SupervisorJob()), { false }, { }, { c, _ -> info(c, 5u) })
         val e = nb.adoptarSiSano(b, paqueteB)
         assertTrue("$e", e is EstadoNodo.Caido && e.ultimoError.contains("no se pudo guardar"))
@@ -61,6 +64,7 @@ class NodeBridgeCarrerasInstrumentadoTest {
      */
     @Test
     fun siCommitFallaDespuesDeTocarLaMemoria_todoSigueEnA_tambienEnFrio() = runBlocking {
+        assumeTrue("solo en la edición de prueba (signet); en mainnet no aplica", Redes.permitida(Red.SIGNET))
         val nombre = "x39-wallet-prueba-disco-${System.nanoTime()}"
         val prefsDir = java.io.File(ctx.applicationInfo.dataDir, "shared_prefs")
         val fichero = java.io.File(prefsDir, "$nombre.xml")
@@ -90,6 +94,7 @@ class NodeBridgeCarrerasInstrumentadoTest {
 
     @Test
     fun olvidarDuranteUnaAdopcionLenta_noQuedaNadaGuardado() = runBlocking {
+        assumeTrue("solo en la edición de prueba (signet); en mainnet no aplica", Redes.permitida(Red.SIGNET))
         val entrado = CountDownLatch(1)
         val soltar = CountDownLatch(1)
         val nb = NodeBridgeImpl(ajustes, CoroutineScope(SupervisorJob()), { false }, { }, { c, _ -> entrado.countDown(); soltar.await(); info(c, 5u) })
@@ -107,6 +112,7 @@ class NodeBridgeCarrerasInstrumentadoTest {
 
     @Test
     fun descartarCandidatoLento_elNodoVigenteSigueSanoASuAltura_yAdoptarGuardaConfigYMetadatosJuntos() = runBlocking {
+        assumeTrue("solo en la edición de prueba (signet); en mainnet no aplica", Redes.permitida(Red.SIGNET))
         val entrado = CountDownLatch(1)
         val soltar = CountDownLatch(1)
         val nb = NodeBridgeImpl(ajustes, CoroutineScope(SupervisorJob()), { false }, { }, { c, min ->

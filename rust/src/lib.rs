@@ -50,7 +50,7 @@ pub(crate) mod mock_electrum;
 
 pub use envios::{EnvioInfo, EstadoEnvio};
 use nodo::Conexion;
-pub use nodo::{comprobar_nodo, NodoInfo};
+pub use nodo::{comprobar_nodo, huella_servidor, NodoInfo};
 
 use bdk_electrum::electrum_client;
 use bdk_wallet::chain::ChainPosition;
@@ -483,12 +483,13 @@ fn ya_conocida(e: &electrum_client::Error) -> bool {
 /// Altura del último bloque que conoce el servidor (de la red `red`, verificada). `huella`:
 /// huella SPKI del certificado con `ssl://`, la misma que en el resto de operaciones.
 /// `altura_vista`: la última altura que ya se vio (0 si ninguna); un servidor por debajo se
-/// rechaza como en cualquier otra operación.
+/// rechaza como en cualquier otra operación. `proxy`: proxy SOCKS5 `host:puerto` o `None`.
 pub fn altura_red(
     red: Red,
     servidor: &str,
     huella: Option<&str>,
     altura_vista: u32,
+    proxy: Option<&str>,
 ) -> Result<u32, Error> {
     // La altura validada al abrir (puerta 4) es la respuesta: sin segunda consulta.
     let (_, v) = Conexion::abrir_validada(
@@ -497,6 +498,7 @@ pub fn altura_red(
         huella,
         ESPERA_RED,
         altura_vista,
+        proxy,
     )?;
     Ok(v.altura)
 }
@@ -510,6 +512,7 @@ pub fn estimar_comision(
     bloques: usize,
     huella: Option<&str>,
     altura_vista: u32,
+    proxy: Option<&str>,
 ) -> Result<f64, Error> {
     let c = Conexion::abrir(
         servidor,
@@ -517,6 +520,7 @@ pub fn estimar_comision(
         huella,
         ESPERA_RED,
         altura_vista,
+        proxy,
     )?;
     let btc_kvb = c.comision_btc_kvb(bloques)?;
     // BTC/kvB → sat/vB: ×1e8 sat/BTC ÷ 1000 vB/kvB.
@@ -649,6 +653,9 @@ pub struct Billetera {
     espera: Duration,
     /// Huella SPKI (hex) del certificado del servidor Electrum, si el usuario la fijó.
     huella: Option<String>,
+    /// Proxy SOCKS5 `host:puerto` (Tor/Orbot) por el que abrir TODAS las conexiones, si el
+    /// usuario lo fijó; obligatorio para un servidor `.onion`.
+    proxy: Option<String>,
     pendiente: Option<Pendiente>,
     envios: envios::Registro,
 }
@@ -684,6 +691,7 @@ impl Billetera {
             _reserva: reserva,
             espera: ESPERA_RED,
             huella: None,
+            proxy: None,
             pendiente: None,
             envios,
         })
@@ -710,6 +718,7 @@ impl Billetera {
             _reserva: reserva,
             espera: ESPERA_RED,
             huella: None,
+            proxy: None,
             pendiente: None,
             envios,
         };
@@ -741,6 +750,14 @@ impl Billetera {
             .filter(|h| !h.is_empty());
     }
 
+    /// Proxy SOCKS5 `host:puerto` (Tor/Orbot) para todas las conexiones de esta billetera;
+    /// `None` = directo. Con un servidor `.onion` y sin proxy, ninguna operación abre socket.
+    pub fn fijar_proxy(&mut self, proxy: Option<String>) {
+        self.proxy = proxy
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty());
+    }
+
     /// Conexión para una operación de esta billetera: pasa las cuatro puertas con la altura
     /// hasta la que la billetera ya está sincronizada como mínima (un servidor que ha
     /// retrocedido respecto a lo que esta billetera vio se rechaza antes de operar).
@@ -751,6 +768,7 @@ impl Billetera {
             self.huella.as_deref(),
             self.espera,
             self.altura(),
+            self.proxy.as_deref(),
         )
     }
 

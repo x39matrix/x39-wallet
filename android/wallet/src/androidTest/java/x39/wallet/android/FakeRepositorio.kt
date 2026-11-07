@@ -48,4 +48,5 @@ class FakeRepositorio(ctx: Context) : Repositorio {
         return envio(txid, EstadoEnvio.ENVIADA)
     }
     override suspend fun cancelar(txid: String) = envio(txid, EstadoEnvio.CANCELADA)
+    override suspend fun huellaServidor(electrum: String, proxySocks5: String?): String = throw UnsupportedOperationException()
 }

@@ -43,9 +43,10 @@ data class ConfigNodo(
     val tunel: ModoTunel,                // NINGUNO | EXTERNO | PROPIO (ver §6)
     val tunelPropio: TunelPropio?,       // solo con PROPIO: datos del nodo; la clave privada del móvil no está aquí
     val nombre: String,                  // etiqueta que elige el usuario ("mi nodo")
+    val proxySocks5: String?,            // "IP:puerto" (Tor/Orbot, p. ej. 127.0.0.1:9050); obligatorio con .onion; solo IP literal, nunca un nombre
 )
 
-enum class ModoTunel { NINGUNO, EXTERNO, PROPIO }
+enum class ModoTunel { NINGUNO, EXTERNO, PROPIO, X39 } // X39: el túnel de la app, solo para el nodo X-39
 
 // Lo que el nodo entrega para el túnel propio. Ninguna clave privada: la del móvil la genera
 // el móvil y vive cifrada en su almacén; la del nodo no sale del nodo.
@@ -72,7 +73,7 @@ interface NodeBridge {
     suspend fun comprobar(): EstadoNodo                   // conexión única, sin vigilancia
     suspend fun probar(config: ConfigNodo): EstadoNodo    // mismas reglas, sin guardar ni publicar
     suspend fun adoptarSiSano(config: ConfigNodo): EstadoNodo // emparejamiento: guarda y publica SOLO si Sano
-    fun vigilar(activo: Boolean)                          // vigilancia con reconexión creciente
+    fun vigilar(activo: Boolean)                          // vigilancia con reconexión creciente; una señal de red (SenalRed) la despierta
     // La importación del paquete (QR o fichero) la hace Emparejamiento.analizar(texto, red) (E-2).
     fun clavePublicaDelMovil(): String                    // para mostrarla (QR) al nodo; la privada nunca sale (E-3)
     suspend fun conexionSana(): ConexionMotor?            // URL + huella de la MISMA generación, solo si Sano
@@ -99,12 +100,20 @@ Reglas de la interfaz:
 
 1. **Red correcta**: `server.features.genesis_hash` debe ser el génesis de `config.red`. Si no,
    `RedIncorrecta` y no se hace nada más (ya implementado en el motor: `Error::RedServidor`).
-2. **Identidad del servidor** (con `ssl://`): la huella SPKI del certificado presentado debe
-   ser `huellaServidor`; se comprueba dentro del apretón de manos TLS, en TODAS las operaciones
-   (escaneo, sincronización, difusión, altura, comisión). Con huella no se valida CA, ni nombre,
-   ni caducidad. Sin huella no se acepta `ssl://` salvo el servidor público de signet (regla de la
-   capa Kotlin; el motor valida entonces contra las raíces públicas). `tcp://` se acepta solo
-   con aviso visible («sin cifrar: solo por tu túnel o tu red local»).
+2. **Identidad del servidor** (con `ssl://`): si hay huella fijada, la huella SPKI del
+   certificado presentado debe ser `huellaServidor`; se comprueba dentro del apretón de manos
+   TLS, en TODAS las operaciones (escaneo, sincronización, difusión, altura, comisión). Con
+   huella no se valida CA, ni nombre, ni caducidad. Sin huella, el certificado se valida contra
+   las raíces públicas (autoridad reconocida, nombre y caducidad), como cualquier cliente TLS;
+   si no valida, se rechaza, salvo que el usuario active expresamente «certificado propio»: la
+   app lee entonces la huella que presenta el servidor (`huella_servidor`, solo el apretón TLS,
+   sin hablar Electrum), la muestra con aviso y la fija. El paquete de emparejamiento (§5) sigue
+   exigiendo la huella con `ssl://`. `tcp://` se acepta solo con aviso visible («sin cifrar:
+   solo por tu túnel o tu red local»); dentro del X39 Túnel no se avisa, porque el túnel cifra.
+   Un host `.onion` exige `proxySocks5`: el motor pide CONNECT al proxy con el nombre tal cual y
+   nunca resuelve `.onion`; sin proxy ninguna operación abre socket. El proxy se escribe como
+   **IP literal** (`127.0.0.1:9050`, `[::1]:9050`), nunca como nombre: un nombre habría que
+   resolverlo en el aparato antes de llegar al proxy (`ConfigNodo.proxyBienFormado`).
 3. **Altura razonable**: la punta del servidor no puede ir por detrás de la última altura vista
    por el móvil; si va por detrás, el nodo está resincronizando y el estado lo dice.
 4. **Versión de protocolo**: `server.version` con protocolo 1.4; si el servidor no lo admite, error
@@ -219,6 +228,7 @@ clave privada del túnel.
 | (a) **Túnel propio** (`PROPIO`) | Levanta su propio perfil WireGuard con la clave privada generada en el móvil y los datos del paquete. Solo si NO hay otra VPN activa en el aparato; si la hay, no lo levanta y lo dice (`Caido` con motivo «hay otra VPN activa»). |
 | (b) **Túnel externo** (`EXTERNO`) | No toca ninguna VPN. EXIGE que haya una VPN activa en el aparato y comprueba que el nodo responde. Detectar una VPN activa NO demuestra que el tráfico hacia ESE nodo viaje por ella (Android permite rutas por destino): salvo que se verifique el encaminamiento, el texto al usuario no debe afirmarlo. Si la VPN cae, el estado pasa a caído. |
 | Ninguno (`NINGUNO`) | El nodo es alcanzable directamente (red local, nodo con TLS público…). |
+| **X39 Túnel** (`X39`) | Solo lo lleva la configuración del «Nodo X-39» (§10). ANTES de abrir ningún socket se consulta la detección REAL del túnel (`DetectorTunel` → `DiagnosticoTunel`: redes del sistema con transporte VPN cuyas rutas cubran `10.39.0.3`, por prefijo de bits —vale `10.39.0.0/24` o `0.0.0.0/0`—, o con dirección en `10.39.0.0/24`; nunca el estado en memoria del túnel de la app, que solo se anota en el detalle). `SIN_TUNEL` con certeza → «Túnel apagado. Activa el X39 Túnel; la billetera no se conecta por otra vía.» de inmediato, sin pasar por «conectando…», cero sockets, cero llamadas al motor. `CON_RUTA` o `DESCONOCIDO` → se conecta a `NodoX39.servidor(red)` y solo a esa dirección (nunca se bloquea por una duda: una puerta equivocada dejó la billetera sin nodo con el túnel activo, orden 6); si la conexión falla se vuelve a consultar y la pantalla muestra SOLO uno de los tres textos fijos («túnel apagado» / «túnel activo pero el nodo X-39 no responde» / «el nodo X-39 no responde y no se pudo saber si el túnel está activo»); el motivo técnico va al registro `x39.nodo`, sin direcciones. Ninguna excepción cruda llega a la pantalla; una `CancellationException` se relanza y nunca se enseña (orden 7, 04/11/2026). La vigilancia escucha además una señal de red (`SenalRed`; la real, un `NetworkCallback` de transporte VPN) que la despierta enseguida cuando aparece o desaparece la VPN, con rebote de 500 ms y reinicio de la espera creciente; la señal solo despierta, decide la puerta (orden 8). Los textos de los tres casos siguen siendo las constantes castellanas de `NodoX39` (claves estables); la pantalla los traduce al pintar con `Textos.kt` (orden 9a). |
 
 La app elige el modo; NodeBridge nunca levanta un túnel si hay otro activo, y cuando no
 puede, lo explica en el estado en vez de fallar en silencio. Orden de implementación: primero
@@ -249,6 +259,26 @@ puede, lo explica en el estado en vez de fallar en silencio. Orden de implementa
 | `tcp://` con aviso | se acepta con el estado marcado como sin cifrar |
 | Túnel externo | nodo alcanzable solo a través de la VPN activa: `Sano`; VPN caída: `Caido` |
 | Túnel propio con otra VPN activa | no se levanta y el estado lo dice |
+
+## 10. Selector de nodo (Ajustes → Nodo)
+
+Cada usuario elige con qué nodo sincroniza SU billetera:
+
+| Modo | Qué es | Cómo se guarda |
+|---|---|---|
+| **Nodo X-39** (predeterminado) | El servidor Electrum de X-39, por red (`NodoX39.servidor(red)`: `tcp://` + puerto Electrum, DENTRO del túnel; mainnet y signet, no regtest), con `ModoTunel.X39`. Sin nada que escribir. Antes de conectar, la detección real del túnel: sin túnel (certeza) no se abre socket y se muestra de inmediato «Túnel apagado. Activa el X39 Túnel; la billetera no se conecta por otra vía.»; con ruta o con duda se conecta solo a esa dirección y, si falla, un texto fijo («túnel activo pero el nodo X-39 no responde» o el de «no se pudo saber si el túnel está activo»), sin motivo técnico en pantalla. Nunca se conecta por otra vía. La app no lleva ninguna otra dirección ni puerto del nodo (ni RPC, ni pool, ni SSH). | `configurar` (se guarda aunque el túnel esté apagado; se reintenta cuando vuelva). «Mi nodo» y su emparejamiento se conservan. |
+| **Mi nodo** | El servidor Electrum del usuario (electrs, Fulcrum… sobre su nodo): `tcp://host:puerto`, `ssl://host:puerto` o `.onion` (con proxy SOCKS5). Lo que tenga encima el nodo no es asunto de la app: solo habla Electrum. | «Probar conexión» = `probar` (versión del servidor, red, altura, protocolo, latencia; sin guardar). «Usar este nodo» = `adoptarSiSano`: solo se guarda si da `Sano` (génesis de la red de la billetera incluido); si no, no se toca nada. También por emparejamiento (§5). |
+
+- Sin `modo_nodo` guardado (instalación nueva o anterior a este ajuste): X-39 si no había
+  servidor propio o si el guardado era el de X-39; «Mi nodo» en otro caso (`NodoX39.resolverModo`).
+- Cambiar de servidor no borra nada: la cadena es la misma y basta sincronizar; con un escaneo
+  completo pendiente, se hace al sincronizar y se dice.
+- La dirección de «Mi nodo» sobrevive al reinicio y a volver al nodo X-39, y no pasa por ningún
+  registro (`Log`).
+- Seguridad (en la app): «Nodo: X-39 por túnel» o «Nodo: el tuyo (host)» y la frase fija: «El
+  servidor Electrum que uses ve las direcciones de tu billetera. Con tu propio nodo no las ve
+  nadie más.»
+- `olvidar()` deja «Mi nodo» vacío (sin nodo) hasta que el usuario elija.
 
 ## 9. Fuera de este documento
 

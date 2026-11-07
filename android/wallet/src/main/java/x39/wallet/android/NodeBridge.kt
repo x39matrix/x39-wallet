@@ -6,15 +6,20 @@ import android.net.NetworkCapabilities
 import android.os.Build
 import androidx.annotation.RequiresApi
 import kotlin.random.Random
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -34,34 +39,145 @@ enum class ModoTunel {
     EXTERNO,
     /** Perfil WireGuard propio de NodeBridge (E-3: solo definido, no implementado). */
     PROPIO,
+    /**
+     * El X39 Túnel (la VPN WireGuard de la propia app). Solo lo lleva la configuración del «Nodo
+     * X-39» ([NodoX39.config]): antes de conectar se consulta la detección real del túnel
+     * ([DetectorTunel]); sin túnel no se abre socket ni se conecta por ninguna otra vía.
+     */
+    X39,
 }
 
-/** Configuración del nodo del usuario. Vacía por defecto: sin nodo no hay red. */
+/**
+ * Diagnóstico del X39 Túnel por la detección REAL de redes del sistema (redes con transporte VPN
+ * cuyas rutas cubran 10.39.0.3), nunca por el estado en memoria del túnel de la app. Desde la
+ * orden 7 se consulta ANTES de conectar en modo X-39: [SIN_TUNEL] con certeza → no se abre
+ * ningún socket; [CON_RUTA] o [DESCONOCIDO] → se intenta (nunca se bloquea por una duda) y, si
+ * la conexión falla, se vuelve a consultar para elegir el texto.
+ */
+enum class EstadoTunel {
+    /** Hay una red VPN del sistema con ruta a 10.39.0.3 (o dirección en 10.39.0.0/24). */
+    CON_RUTA,
+    /** Se consultaron las redes y NO hay ninguna VPN con ruta al nodo: el túnel está apagado. */
+    SIN_TUNEL,
+    /** No se pudo consultar las redes del aparato (sin ConnectivityManager, excepción…). */
+    DESCONOCIDO,
+}
+
+/** Resultado del diagnóstico: el estado y un detalle para el registro (sin direcciones de billetera). */
+data class DiagnosticoTunel(val estado: EstadoTunel, val detalle: String)
+
+/** Detección del túnel, inyectable (la real recorre las redes del sistema; en las pruebas, un doble). */
+fun interface DetectorTunel {
+    fun diagnosticar(): DiagnosticoTunel
+}
+
+/**
+ * Punto de conexión con el nodo, inyectable: el real es `comprobarNodo` del motor (la firma del
+ * motor no cambia); en las pruebas, un doble que cuenta intentos y anota el destino sin abrir red.
+ */
+fun interface ConexionNodo {
+    fun comprobar(c: ConfigNodo, alturaMin: UInt): NodoInfo
+}
+
+/**
+ * Señal de cambio de red (orden 8, H2): aparece o desaparece una red VPN, o cambian sus rutas.
+ * `escuchar` registra `alCambiar` y devuelve la función para dejar de escuchar. La señal solo
+ * DESPIERTA a la vigilancia ([NodeBridge.vigilar]); la decisión de abrir socket o no sigue siendo
+ * de la puerta y del diagnóstico del túnel ([DetectorTunel]), la única fuente de verdad. La real
+ * es un `ConnectivityManager.NetworkCallback` de transporte VPN; en las pruebas, un doble. Si
+ * `escuchar` lanza (permiso, demasiados callbacks…), la vigilancia sigue con la espera creciente.
+ */
+fun interface SenalRed {
+    fun escuchar(alCambiar: () -> Unit): () -> Unit
+}
+
+/**
+ * Configuración del nodo con el que sincroniza la billetera: el nodo X-39 por el túnel
+ * ([NodoX39.config], predeterminado) o el nodo del usuario («Mi nodo»).
+ */
 data class ConfigNodo(
     val red: Red,
-    /** `ssl://host:puerto` o `tcp://host:puerto`. */
+    /** `ssl://host:puerto` o `tcp://host:puerto`; el host puede ser un servicio `.onion`. */
     val electrum: String,
-    /** Huella SPKI (SHA-256, hex) del certificado; obligatoria con `ssl://` salvo el servidor público de signet. */
+    /**
+     * Huella SPKI (SHA-256, hex) del certificado, solo con `ssl://`. Con huella la app acepta
+     * únicamente ese certificado («certificado propio»); sin ella el motor valida el certificado
+     * contra las autoridades públicas reconocidas, como cualquier cliente TLS.
+     */
     val huellaServidor: String?,
     val tunel: ModoTunel,
     val nombre: String,
+    /**
+     * Proxy SOCKS5 `IP:puerto` (Tor/Orbot, por defecto `127.0.0.1:9050`) por el que va TODA la
+     * conexión; obligatorio con `.onion`. Solo una IP literal: un nombre obligaría a resolverlo en
+     * este aparato (DNS) antes de llegar al proxy, y eso es justo lo que el proxy evita.
+     */
+    val proxySocks5: String? = null,
 ) {
     fun cifrado(): Boolean = electrum.startsWith("ssl://")
     fun esPublicoDeSignet(): Boolean = red == Red.SIGNET && electrum == Redes.SERVIDOR_PUBLICO_SIGNET
+
+    /** `host` sin esquema ni puerto (`[IPv6]` con sus corchetes). */
+    fun host(): String {
+        val sinEsquema = electrum.substringAfter("://")
+        return if (sinEsquema.startsWith("[")) sinEsquema.substringBefore("]") + "]" else sinEsquema.substringBeforeLast(':')
+    }
+
+    /** Servicio oculto de Tor: solo se alcanza por un proxy SOCKS5. */
+    fun esOnion(): Boolean = host().lowercase().endsWith(".onion")
 
     /** Reglas de la configuración; `null` si es válida, si no el motivo. */
     fun invalida(): String? = when {
         electrum.isBlank() -> "sin servidor Electrum"
         !electrum.startsWith("ssl://") && !electrum.startsWith("tcp://") -> "el servidor debe empezar por ssl:// o tcp://"
-        cifrado() && huellaServidor.isNullOrBlank() && !esPublicoDeSignet() -> "con ssl:// hace falta la huella del certificado del nodo (salvo el servidor público de signet)"
+        host().isBlank() || !electrum.substringAfterLast(':').all { it.isDigit() } || electrum.substringAfterLast(':').toIntOrNull() !in 1..65535 -> "el servidor debe ser host:puerto (puerto entre 1 y 65535)"
         !cifrado() && !huellaServidor.isNullOrBlank() -> "la huella solo se comprueba con ssl://"
+        esOnion() && proxySocks5.isNullOrBlank() -> "un servidor .onion solo se alcanza por un proxy SOCKS5 (Orbot): activa el proxy"
+        proxySocks5 != null && !proxyBienFormado(proxySocks5) -> "el proxy SOCKS5 debe ser IP:puerto (por ejemplo 127.0.0.1:9050), no un nombre: un nombre habría que resolverlo en este aparato"
         tunel == ModoTunel.PROPIO -> "el túnel propio todavía no está disponible"
         else -> null
+    }
+
+    companion object {
+        private val IPV4 = Regex("""^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$""")
+        private val GRUPO_IPV6 = Regex("^[0-9a-fA-F]{1,4}$")
+
+        /** IPv4 literal `A.B.C.D` (cada octeto 0–255). */
+        fun esIpv4Literal(h: String): Boolean = IPV4.matches(h)
+
+        /**
+         * IPv6 literal SIN corchetes: grupos hexadecimales de 1 a 4 cifras separados por `:`, con
+         * `::` como mucho una vez y, opcionalmente, una IPv4 incrustada al final. Basta para
+         * distinguir una dirección de un nombre (que nunca lleva dos `:`); la validez exacta la
+         * comprueba el sistema al conectar.
+         */
+        fun esIpv6Literal(h: String): Boolean {
+            if (h.length !in 2..45 || h.count { it == ':' } < 2 || h.contains(":::") || h.split("::").size > 2) return false
+            val grupos = h.split(':')
+            return grupos.withIndex().all { (i, g) -> g.isEmpty() || GRUPO_IPV6.matches(g) || (i == grupos.lastIndex && IPV4.matches(g)) }
+        }
+
+        /**
+         * `IP:puerto` o `[IPv6]:puerto`, con puerto entre 1 y 65535 y la dirección como IP literal.
+         * Un nombre (`localhost`, `orbot.local`…) NO vale: resolverlo sería una consulta DNS desde
+         * este aparato, antes de que nada pase por el proxy.
+         */
+        fun proxyBienFormado(p: String): Boolean {
+            val s = p.trim()
+            val puerto = s.substringAfterLast(':', "").toIntOrNull() ?: return false
+            if (puerto !in 1..65535) return false
+            return if (s.startsWith("[")) {
+                val h = s.substringAfter("[").substringBefore("]", "")
+                h.isNotEmpty() && s.indexOf("]:") == h.length + 1 && s.indexOf(':', h.length + 3) == -1 && esIpv6Literal(h)
+            } else {
+                esIpv4Literal(s.substringBeforeLast(':', ""))
+            }
+        }
     }
 }
 
 /** Lo que la billetera necesita para una operación de red, atado a UNA generación de configuración. */
-data class ConexionMotor(val url: String, val huella: String?, val generacion: Int)
+data class ConexionMotor(val url: String, val huella: String?, val generacion: Int, val proxy: String? = null)
 
 sealed class EstadoNodo {
     object SinConfigurar : EstadoNodo()
@@ -128,6 +244,52 @@ interface NodeBridge {
 private val REGEX_ALTURA_ATRASADA =
     Regex("""el servidor va por detrás: altura (\d+), ya se había visto (\d+)""")
 
+private val REGEX_OS_ERROR = Regex("""\s*\(os error \d+\)""")
+private val REGEX_URL = Regex("""(tcp|ssl)://\S+""")
+private val REGEX_IP_PUERTO = Regex("""\b\d{1,3}(\.\d{1,3}){3}(:\d{1,5})?\b""")
+private val REGEX_IPV6_PUERTO = Regex("""\[[0-9a-fA-F:.]+](:\d{1,5})?""")
+private val REGEX_PUERTO_TRAS_MARCA = Regex("""<servidor>:\d{1,5}""")
+private val REGEX_ONION = Regex("""[A-Za-z2-7.-]+\.onion(:\d{1,5})?""", RegexOption.IGNORE_CASE)
+
+/**
+ * Texto apto para el registro (logcat): sin la URL, el host ni el proxy de la configuración y sin
+ * ninguna dirección IP, `[IPv6]` ni `.onion` que quede en el mensaje. El nodo X-39 se escribe
+ * igual que cualquier otro: el registro nunca lleva direcciones.
+ */
+internal fun sinDirecciones(msg: String, c: ConfigNodo): String {
+    var t = msg
+    if (c.electrum.isNotBlank()) t = t.replace(c.electrum, "<servidor>")
+    val host = c.host()
+    if (host.isNotBlank()) t = t.replace(host, "<servidor>")
+    c.proxySocks5?.takeIf { it.isNotBlank() }?.let { t = t.replace(it.trim(), "<proxy>") }
+    return t.replace(REGEX_URL, "<servidor>")
+        .replace(REGEX_ONION, "<servidor>")
+        .replace(REGEX_IPV6_PUERTO, "<ip>")
+        .replace(REGEX_IP_PUERTO, "<ip>")
+        .replace(REGEX_PUERTO_TRAS_MARCA, "<servidor>") // el puerto que quede pegado al host sustituido
+}
+
+/**
+ * Error de red del motor o del sistema en lenguaje llano para la pantalla. Quita el «(os error N)»
+ * y antepone una explicación; conserva el texto original entre paréntesis para poder buscarlo.
+ */
+internal fun mensajeLlano(msg: String): String {
+    val limpio = msg.replace(REGEX_OS_ERROR, "").trim()
+    val b = limpio.lowercase()
+    val explicacion = when {
+        "proxy socks5" in b -> return limpio
+        "connection refused" in b -> "nadie responde en esa dirección y puerto"
+        "timed out" in b || "timeout" in b -> "sin respuesta a tiempo: comprueba la dirección, el túnel o el proxy"
+        "resolviendo" in b || "failed to lookup" in b || "name or service not known" in b || "no address associated" in b -> "no se encuentra ese nombre de servidor"
+        "network is unreachable" in b || "no route to host" in b || "host is unreachable" in b -> "red inalcanzable: sin conexión, o el túnel no está activo"
+        "connection reset" in b || "broken pipe" in b || "unexpected eof" in b -> "el servidor cortó la conexión: ¿seguro que ese puerto habla Electrum?"
+        "unknownissuer" in b || "invalid peer certificate" in b || "certificate" in b -> "el certificado del servidor no lo reconoce ninguna autoridad: si es tu propio certificado, activa «certificado propio»"
+        "tls:" in b -> "fallo del cifrado TLS: ¿seguro que ese puerto habla ssl://?"
+        else -> return limpio
+    }
+    return "$explicacion ($limpio)"
+}
+
 /**
  * Si el error es el rechazo del motor por altura, lo traduce al texto de la app; si no, `null`.
  * Es el único sitio donde la app depende de la cadena del motor: la prueba instrumentada la
@@ -156,7 +318,7 @@ class NodeBridgeImpl(
     private val hayVpnActiva: () -> Boolean,
     /** Espera entre reintentos; inyectable para que las pruebas no esperen de verdad. */
     private val esperar: suspend (ms: Long) -> Unit = { delay(it) },
-    private val comprobador: (ConfigNodo, UInt) -> NodoInfo = { c, alturaMin -> comprobarNodo(c.red, c.electrum, c.huellaServidor, alturaMin) },
+    private val comprobador: ConexionNodo = ConexionNodo { c, alturaMin -> comprobarNodo(c.red, c.electrum, c.huellaServidor, alturaMin, c.proxySocks5) },
     /** Despachador para la red; `Dispatchers.IO` en la app, `Unconfined` en las pruebas JVM. */
     private val io: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.IO,
     /**
@@ -165,7 +327,36 @@ class NodeBridgeImpl(
      * debajo del suelo se rechaza aunque sea la primera sonda de la sesión.
      */
     private val alturaSuelo: (Red) -> UInt = { 0u },
+    /**
+     * Detección del X39 Túnel. En modo X-39 se consulta ANTES de conectar: si dice con certeza
+     * `SIN_TUNEL`, no se abre ningún socket; si no, se intenta la conexión a `NodoX39.servidor(red)`
+     * (y a ninguna otra dirección) y, si falla, se vuelve a consultar para elegir el texto. Por
+     * defecto (sin detector real inyectado) no es concluyente: `DESCONOCIDO`, y se intenta.
+     */
+    private val diagnosticoTunel: DetectorTunel = DetectorTunel {
+        DiagnosticoTunel(EstadoTunel.DESCONOCIDO, "sin detector de túnel inyectado")
+    },
+    /**
+     * Registro (logcat, etiqueta `x39.nodo`): resultado del diagnóstico del túnel y motivo del
+     * fallo de conexión, SIN direcciones de billetera ni del servidor del usuario ([sinDirecciones]).
+     */
+    private val registrar: (String) -> Unit = {
+        // En las pruebas JVM android.util.Log es un esbozo que lanza; en el aparato nunca lanza.
+        try { android.util.Log.i(ETIQUETA_REGISTRO, it) } catch (_: RuntimeException) { }
+    },
+    /**
+     * Señal de cambio de red (H2): se escucha solo mientras la vigilancia está activa y despierta
+     * la comprobación sin esperar la espera creciente. Por defecto no hay señal (nada cambia).
+     */
+    private val senalRed: SenalRed = SenalRed { { } },
+    /** Rebote tras una señal de red: las que lleguen en ráfaga cuentan como una sola. */
+    private val reboteMs: Long = REBOTE_MS,
 ) : NodeBridge {
+
+    companion object {
+        const val ETIQUETA_REGISTRO = "x39.nodo"
+        const val REBOTE_MS = 500L
+    }
 
     /**
      * Configuración ACTIVA, en memoria: solo cambia cuando el almacén ha persistido de verdad
@@ -180,6 +371,10 @@ class NodeBridgeImpl(
     override val config: ConfigNodo? get() = activa
 
     private var vigilancia: Job? = null
+    /** Despertador de la vigilancia (H2): como mucho UNA señal de red pendiente (canal conflado). */
+    private val despertador = Channel<Unit>(Channel.CONFLATED)
+    /** Cómo dejar de escuchar la señal de red; solo mientras la vigilancia está activa. */
+    private var dejarDeEscuchar: (() -> Unit)? = null
     private var caidoDesde: Long = 0
     private var alturaVista: UInt = 0u
     /** Generación de la configuración: cambia con cada configurar/olvidar; descarta resultados viejos. */
@@ -222,10 +417,11 @@ class NodeBridgeImpl(
         vigilar(false)
         cerrojo.withLock {
             ajustes.borrar()
-            activa = null
+            // Lo que quede en el almacén tras borrar (en la app, nada: «Mi nodo» vacío).
+            activa = ajustes.leer()
             generacion.incrementAndGet()
             generacionSano = -1
-            _estado.value = EstadoNodo.SinConfigurar
+            _estado.value = if (activa == null) EstadoNodo.SinConfigurar else EstadoNodo.Conectando
         }
     }
 
@@ -277,8 +473,13 @@ class NodeBridgeImpl(
         val (gen, c, vista) = cerrojo.withLock { Triple(generacion.get(), activa, alturaVista) }
         if (c == null) return@withContext EstadoNodo.SinConfigurar.also { _estado.value = it }
         val alturaMin = maxOf(vista, alturaSuelo(c.red))
-        _estado.value = EstadoNodo.Conectando
-        val e = comprobarUnaVez(c, alturaMin)
+        // G1: con el túnel apagado (certeza) el resultado es inmediato, sin pasar por «conectando…»
+        // y sin abrir ningún socket. Con duda o con ruta, se conecta como siempre.
+        val puerta = if (c.invalida() == null) puertaTunel(c) else null
+        val e = puerta ?: run {
+            _estado.value = EstadoNodo.Conectando
+            comprobarUnaVez(c, alturaMin, puertaHecha = true)
+        }
         cerrojo.withLock {
             if (gen != generacion.get()) {
                 // Resultado de una configuración vieja: no se publica ni toca la altura vista.
@@ -300,31 +501,80 @@ class NodeBridgeImpl(
         val c = activa ?: return null
         val e = comprobar()
         if (!e.sano || gen != generacion.get() || generacionSano != gen) return null
-        return ConexionMotor(c.electrum, c.huellaServidor?.takeIf { it.isNotBlank() }, gen)
+        return ConexionMotor(c.electrum, c.huellaServidor?.takeIf { it.isNotBlank() }, gen, c.proxySocks5?.takeIf { it.isNotBlank() })
     }
 
     /**
      * Una comprobación PURA: no toca `alturaVista` ni `caidoDesde` (eso lo decide quien la llama,
      * bajo el cerrojo, y solo para el nodo vigente). `alturaMin` es la altura mínima exigida.
      */
-    private fun comprobarUnaVez(c: ConfigNodo, alturaMin: UInt): EstadoNodo {
+    private fun comprobarUnaVez(c: ConfigNodo, alturaMin: UInt, puertaHecha: Boolean = false): EstadoNodo {
         c.invalida()?.let { return EstadoNodo.Caido(0, it, 0) }
         if (c.tunel == ModoTunel.EXTERNO && !hayVpnActiva()) {
             return EstadoNodo.Caido(0, "túnel externo no activo: se exige una VPN activa en el aparato", 0)
         }
+        // G1: en modo X-39 la detección real del túnel va ANTES de abrir socket (salvo que quien
+        // llama ya la haya hecho). Solo la certeza «sin túnel» corta; la duda no bloquea.
+        if (!puertaHecha) puertaTunel(c)?.let { return it }
+        // Modo X-39: la conexión va a NodoX39.servidor(red) (c.electrum es esa y no otra:
+        // NodoX39.config); si falla, el diagnóstico se repite y elige uno de los textos fijos.
+        val modo = if (c.tunel == ModoTunel.X39) "X-39" else "Mi nodo"
         return try {
-            val info = comprobador(c, alturaMin)
+            val info = comprobador.comprobar(c, alturaMin)
+            if (c.tunel == ModoTunel.X39) registrar("$modo: nodo sano por el túnel (servidor ${info.versionServidor}, altura ${info.altura}, ${info.latenciaMs} ms)")
             EstadoNodo.Sano(info, sinCifrar = !info.cifrado)
+        } catch (e: CancellationException) {
+            // G6: la cancelación de la corrutina nunca es un texto de pantalla; se relanza tal cual.
+            throw e
         } catch (e: x39.wallet.Exception.RedServidor) {
+            registrar("$modo: el servidor respondió pero es de otra red: ${sinDirecciones(e.message ?: "", c)}")
             EstadoNodo.RedIncorrecta(c.red, e.message ?: "")
         } catch (e: x39.wallet.Exception.HuellaServidor) {
+            registrar("$modo: certificado rechazado: ${sinDirecciones(e.message ?: "", c)}")
             EstadoNodo.HuellaIncorrecta(e.message ?: "")
         } catch (e: x39.wallet.Exception.RedProhibida) {
             EstadoNodo.Caido(0, "red no permitida en esta edición", 0)
         } catch (e: Exception) {
-            val msg = mensajeAlturaSiAplica(e.message) ?: e.message ?: e.javaClass.simpleName
-            EstadoNodo.Caido(0, msg, 0)
+            val altura = mensajeAlturaSiAplica(e.message)
+            val motivo = altura ?: mensajeLlano(e.message ?: e.javaClass.simpleName)
+            if (altura != null) {
+                // El servidor respondió (va por detrás): no es un fallo del túnel; texto fijo de la app.
+                registrar("$modo: ${sinDirecciones(altura, c)}")
+                EstadoNodo.Caido(0, altura, 0)
+            } else if (c.tunel == ModoTunel.X39) {
+                // G6: en pantalla solo uno de los tres textos fijos; el motivo, en el registro.
+                val d = diagnosticar()
+                registrar("$modo: conexión fallida (${sinDirecciones(motivo, c)}); diagnóstico del túnel: ${d.estado} (${sinDirecciones(d.detalle, c)})")
+                EstadoNodo.Caido(0, NodoX39.mensajeFallo(d.estado), 0)
+            } else {
+                registrar("$modo: conexión fallida (${sinDirecciones(motivo, c)})")
+                EstadoNodo.Caido(0, motivo, 0)
+            }
         }
+    }
+
+    /** Diagnóstico que nunca lanza: un detector que falle cuenta como «no concluyente». */
+    private fun diagnosticar(): DiagnosticoTunel = try {
+        diagnosticoTunel.diagnosticar()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (ex: Exception) {
+        DiagnosticoTunel(EstadoTunel.DESCONOCIDO, "el diagnóstico lanzó ${ex.javaClass.simpleName}")
+    }
+
+    /**
+     * Puerta del modo X-39 (orden 7, G1): ANTES de abrir ningún socket, la detección real del
+     * túnel. Solo si dice con certeza `SIN_TUNEL` se corta: texto fijo [NodoX39.MENSAJE_TUNEL],
+     * cero conexiones, cero llamadas al motor. `CON_RUTA` o `DESCONOCIDO` → `null`: se intenta
+     * (la orden 6 enseñó que una puerta equivocada deja la billetera sin nodo con el túnel activo).
+     * En «Mi nodo» no hay puerta.
+     */
+    private fun puertaTunel(c: ConfigNodo): EstadoNodo.Caido? {
+        if (c.tunel != ModoTunel.X39) return null
+        val d = diagnosticar()
+        if (d.estado != EstadoTunel.SIN_TUNEL) return null
+        registrar("X-39: túnel apagado, no se abre socket; diagnóstico del túnel: SIN_TUNEL (${sinDirecciones(d.detalle, c)})")
+        return EstadoNodo.Caido(0, NodoX39.MENSAJE_TUNEL, 0)
     }
 
     /** Caída del nodo VIGENTE: anota desde cuándo (bajo el cerrojo). */
@@ -337,7 +587,10 @@ class NodeBridgeImpl(
     override fun vigilar(activo: Boolean) {
         vigilancia?.cancel()
         vigilancia = null
+        // H2: al desactivar la vigilancia se deja de escuchar la red (sin fugas).
+        dejarDeEscuchar?.let { parar -> dejarDeEscuchar = null; try { parar() } catch (_: Exception) { } }
         if (!activo) return
+        vaciarDespertador() // señales llegadas con la vigilancia parada: ya no dicen nada
         // Arranque perezoso: el Job queda guardado ANTES de que corra el cuerpo, para que
         // vigilar(false) lo cancele aunque el despachador ejecute en el mismo hilo.
         val trabajo = ambito.launch(io, start = kotlinx.coroutines.CoroutineStart.LAZY) {
@@ -346,11 +599,63 @@ class NodeBridgeImpl(
                 val e = comprobar()
                 val espera = if (e.sano) { intento = 0; 60_000L } else { esperaMs(intento).also { intento++ } }
                 if (e is EstadoNodo.Caido) _estado.value = e.copy(proximoIntentoEnS = espera / 1000)
-                esperar(espera)
+                // H2: la espera termina a su hora O con una señal de red. Tras la señal, un rebote
+                // corto; las señales que lleguen en ráfaga se descartan (una sola comprobación) y
+                // la espera creciente vuelve a empezar.
+                var dormir = true
+                while (dormir && esperarODespertar(espera)) {
+                    esperar(reboteMs)
+                    vaciarDespertador()
+                    if (senalSinEfecto()) {
+                        registrar("cambio de red sin efecto: el túnel sigue con ruta y el nodo sano")
+                    } else {
+                        registrar("cambio de red: se comprueba el nodo ahora")
+                        intento = 0
+                        dormir = false
+                    }
+                }
             }
         }
         vigilancia = trabajo
+        // La señal solo despierta; si no se puede escuchar, la vigilancia sigue como antes.
+        dejarDeEscuchar = try {
+            senalRed.escuchar { despertador.trySend(Unit) }
+        } catch (e: Exception) {
+            registrar("sin señal de red (${e.javaClass.simpleName}): la vigilancia sigue con la espera creciente")
+            null
+        }
         trabajo.start()
+    }
+
+    private fun vaciarDespertador() {
+        while (despertador.tryReceive().isSuccess) { /* descartar */ }
+    }
+
+    /**
+     * Espera `ms` (con la función inyectada) o hasta la primera señal de red, lo que antes llegue.
+     * `true` si fue la señal.
+     */
+    private suspend fun esperarODespertar(ms: Long): Boolean = coroutineScope {
+        val senal = async { despertador.receive(); true }
+        val plazo = async { esperar(ms); false }
+        try {
+            select<Boolean> { senal.onAwait { it }; plazo.onAwait { it } }
+        } finally {
+            senal.cancel()
+            plazo.cancel()
+        }
+    }
+
+    /**
+     * Una señal de red no obliga a comprobar si NADA ha cambiado para el nodo: en modo X-39 con el
+     * nodo sano y el túnel todavía con ruta (lo dice el diagnóstico, la única fuente de verdad), se
+     * deja la vigilancia como está. Así, al activar la vigilancia con el túnel ya levantado, el
+     * `onAvailable` inicial del sistema no abre un segundo socket. En cualquier otro caso (nodo
+     * caído, túnel sin ruta, «Mi nodo») la comprobación es inmediata.
+     */
+    private fun senalSinEfecto(): Boolean {
+        if (!_estado.value.sano || activa?.tunel != ModoTunel.X39) return false
+        return diagnosticar().estado == EstadoTunel.CON_RUTA
     }
 
 }

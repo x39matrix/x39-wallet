@@ -10,6 +10,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import x39.wallet.Red
@@ -36,6 +37,7 @@ class AjustesActivityInstrumentadoTest {
 
     @Test
     fun elBotonDelServidorPublicoRellenaElCampo_soloEnSignet() {
+        assumeTrue("solo en la edición de prueba (signet); en mainnet no aplica", Redes.permitida(Red.SIGNET))
         val fake = FakeRepositorio(ctx)
         fake.ajustes.red = Red.SIGNET
         fake.ajustes.servidor = ""

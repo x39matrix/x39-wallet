@@ -431,11 +431,11 @@ mod sin_mainnet {
         );
         // Se rechaza ANTES de intentar conectar con nadie.
         assert_eq!(
-            altura_red(Red::Mainnet, "tcp://sin-servidor:1", None, 0).unwrap_err(),
+            altura_red(Red::Mainnet, "tcp://sin-servidor:1", None, 0, None).unwrap_err(),
             Error::RedProhibida
         );
         assert_eq!(
-            estimar_comision(Red::Mainnet, "tcp://sin-servidor:1", 2, None, 0).unwrap_err(),
+            estimar_comision(Red::Mainnet, "tcp://sin-servidor:1", 2, None, 0, None).unwrap_err(),
             Error::RedProhibida
         );
         // Abrir un estado (de signet) como mainnet: prohibido también.
@@ -459,9 +459,12 @@ fn regtest_sincroniza_con_el_simulado() {
     assert_eq!(b.altura(), 1);
     assert_eq!(b.saldo().confirmado, FONDOS);
     assert_eq!(b.movimientos().len(), 1);
-    assert_eq!(altura_red(Red::Regtest, &sim.url, None, 0).unwrap(), 1);
     assert_eq!(
-        estimar_comision(Red::Regtest, &sim.url, 2, None, 0).unwrap(),
+        altura_red(Red::Regtest, &sim.url, None, 0, None).unwrap(),
+        1
+    );
+    assert_eq!(
+        estimar_comision(Red::Regtest, &sim.url, 2, None, 0, None).unwrap(),
         2.0
     );
 }
@@ -528,15 +531,15 @@ fn servidor_de_otra_red_rechazado() {
         Error::RedServidor(_)
     ));
     assert!(matches!(
-        altura_red(Red::Regtest, &sim.url, None, 0).unwrap_err(),
+        altura_red(Red::Regtest, &sim.url, None, 0, None).unwrap_err(),
         Error::RedServidor(_)
     ));
     assert!(matches!(
-        estimar_comision(Red::Regtest, &sim.url, 2, None, 0).unwrap_err(),
+        estimar_comision(Red::Regtest, &sim.url, 2, None, 0, None).unwrap_err(),
         Error::RedServidor(_)
     ));
     // Pedido como signet, el mismo servidor vale.
-    assert_eq!(altura_red(Red::Signet, &sim.url, None, 0).unwrap(), 1);
+    assert_eq!(altura_red(Red::Signet, &sim.url, None, 0, None).unwrap(), 1);
     // Y una tx firmada no se intenta difundir a un servidor de otra red: estado intacto.
     let e = firmar_40k(&mut b);
     assert!(matches!(
@@ -1407,9 +1410,9 @@ fn signet_restaurar_encuentra_direcciones() {
 #[test]
 #[ignore]
 fn signet_altura_y_comision() {
-    let h = altura_red(Red::Signet, SIGNET, None, 0).unwrap();
+    let h = altura_red(Red::Signet, SIGNET, None, 0, None).unwrap();
     assert!(h > 300_000, "altura {h}");
-    let c = estimar_comision(Red::Signet, SIGNET, 2, None, 0).unwrap();
+    let c = estimar_comision(Red::Signet, SIGNET, 2, None, 0, None).unwrap();
     assert!((1.0..10_000.0).contains(&c), "comisión {c} sat/vB");
 }
 
@@ -1433,9 +1436,9 @@ fn sin_fallos_de_red<T>(mut f: impl FnMut() -> Result<T, Error>) -> Result<T, Er
 #[ignore]
 fn signet_servidor_publico_rechazado_si_se_pide_otra_red() {
     // El genesis_hash del servidor de signet no es el de testnet ni el de regtest.
-    let e = sin_fallos_de_red(|| altura_red(Red::Testnet, SIGNET, None, 0)).unwrap_err();
+    let e = sin_fallos_de_red(|| altura_red(Red::Testnet, SIGNET, None, 0, None)).unwrap_err();
     assert!(matches!(e, Error::RedServidor(_)), "{e}");
-    let e = sin_fallos_de_red(|| altura_red(Red::Regtest, SIGNET, None, 0)).unwrap_err();
+    let e = sin_fallos_de_red(|| altura_red(Red::Regtest, SIGNET, None, 0, None)).unwrap_err();
     assert!(matches!(e, Error::RedServidor(_)), "{e}");
     let dir = tempfile::tempdir().unwrap();
     let mut b = Billetera::crear(mn(), Red::Testnet, &dir.path().join("t.dat")).unwrap();
@@ -1466,7 +1469,7 @@ fn nodo_tls_con_huella_correcta_es_sano_y_la_billetera_sincroniza_por_el() {
     let sim = Simulado::arrancar_tls(Network::Regtest);
     let huella = sim.huella();
     assert_eq!(huella.len(), 64);
-    let info = comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), 0).unwrap();
+    let info = comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), 0, None).unwrap();
     assert!(info.cifrado);
     assert_eq!(info.huella_vista, huella);
     assert_eq!(info.protocolo, "1.4");
@@ -1485,7 +1488,7 @@ fn nodo_tls_con_huella_correcta_es_sano_y_la_billetera_sincroniza_por_el() {
     );
     assert_eq!(sim.difundidas().len(), 1);
     // Altura mínima: si el móvil ya vio más, el servidor va por detrás.
-    let err = comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), 5).unwrap_err();
+    let err = comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), 5, None).unwrap_err();
     assert!(
         matches!(err, Error::Red(ref m) if m.contains("por detrás")),
         "{err}"
@@ -1497,20 +1500,20 @@ fn nodo_tls_con_huella_incorrecta_se_rechaza_sin_tocar_nada() {
     let dir = tempfile::tempdir().unwrap();
     let sim = Simulado::arrancar_tls(Network::Regtest);
     let mala = "00".repeat(32);
-    let err = comprobar_nodo(Red::Regtest, &sim.url, Some(&mala), 0).unwrap_err();
+    let err = comprobar_nodo(Red::Regtest, &sim.url, Some(&mala), 0, None).unwrap_err();
     assert!(
         matches!(err, Error::HuellaServidor(ref m) if m.contains("huella")),
         "{err}"
     );
     // Mal formada.
     assert!(matches!(
-        comprobar_nodo(Red::Regtest, &sim.url, Some("abc"), 0).unwrap_err(),
+        comprobar_nodo(Red::Regtest, &sim.url, Some("abc"), 0, None).unwrap_err(),
         Error::HuellaServidor(_)
     ));
     // Con tcp:// la huella no tiene sentido: se rechaza en vez de ignorarla.
     let plano = Simulado::arrancar(Network::Regtest);
     assert!(matches!(
-        comprobar_nodo(Red::Regtest, &plano.url, Some(&sim.huella()), 0).unwrap_err(),
+        comprobar_nodo(Red::Regtest, &plano.url, Some(&sim.huella()), 0, None).unwrap_err(),
         Error::HuellaServidor(_)
     ));
     // La billetera con la huella mala no sincroniza ni difunde, y el intento no cuenta.
@@ -1539,15 +1542,15 @@ fn nodo_tls_con_huella_incorrecta_se_rechaza_sin_tocar_nada() {
 #[test]
 fn nodo_tls_de_otra_red_se_rechaza() {
     let sim = Simulado::arrancar_tls(Network::Signet);
-    let err = comprobar_nodo(Red::Regtest, &sim.url, Some(&sim.huella()), 0).unwrap_err();
+    let err = comprobar_nodo(Red::Regtest, &sim.url, Some(&sim.huella()), 0, None).unwrap_err();
     assert!(matches!(err, Error::RedServidor(_)), "{err}");
-    assert!(comprobar_nodo(Red::Signet, &sim.url, Some(&sim.huella()), 0).is_ok());
+    assert!(comprobar_nodo(Red::Signet, &sim.url, Some(&sim.huella()), 0, None).is_ok());
 }
 
 #[test]
 fn nodo_tcp_sin_cifrar_se_informa_y_corte_y_vuelta() {
     let sim = Simulado::arrancar(Network::Regtest);
-    let info = comprobar_nodo(Red::Regtest, &sim.url, None, 0).unwrap();
+    let info = comprobar_nodo(Red::Regtest, &sim.url, None, 0, None).unwrap();
     assert!(
         !info.cifrado,
         "tcp:// se informa como sin cifrar (la capa de arriba avisa)"
@@ -1555,11 +1558,11 @@ fn nodo_tcp_sin_cifrar_se_informa_y_corte_y_vuelta() {
     assert!(info.huella_vista.is_empty());
     // Corte: el servidor deja de aceptar conexiones → error de red, nada más.
     sim.parar();
-    let err = comprobar_nodo(Red::Regtest, &sim.url, None, 0).unwrap_err();
+    let err = comprobar_nodo(Red::Regtest, &sim.url, None, 0, None).unwrap_err();
     assert!(matches!(err, Error::Red(_)), "{err}");
     // Vuelta: un servidor de nuevo en pie (en las pruebas, en otro puerto) → sano.
     let otro = Simulado::arrancar(Network::Regtest);
-    assert!(comprobar_nodo(Red::Regtest, &otro.url, None, 0).is_ok());
+    assert!(comprobar_nodo(Red::Regtest, &otro.url, None, 0, None).is_ok());
 }
 
 /// Vector fijo: certificado de prueba y la huella SPKI (SHA-256 del SubjectPublicKeyInfo DER)
@@ -1598,25 +1601,25 @@ fn nodo_la_huella_viaja_en_altura_y_comision() {
     let mala = "11".repeat(32);
     // Con la huella buena, las dos funciones libres funcionan por TLS con huella.
     assert_eq!(
-        altura_red(Red::Regtest, &sim.url, Some(&buena), 0).unwrap(),
+        altura_red(Red::Regtest, &sim.url, Some(&buena), 0, None).unwrap(),
         0
     );
     assert_eq!(
-        estimar_comision(Red::Regtest, &sim.url, 2, Some(&buena), 0).unwrap(),
+        estimar_comision(Red::Regtest, &sim.url, 2, Some(&buena), 0, None).unwrap(),
         2.0
     );
     // Con huella mala, se niegan (no caen a «aceptar cualquier certificado»).
     assert!(matches!(
-        altura_red(Red::Regtest, &sim.url, Some(&mala), 0).unwrap_err(),
+        altura_red(Red::Regtest, &sim.url, Some(&mala), 0, None).unwrap_err(),
         Error::HuellaServidor(_)
     ));
     assert!(matches!(
-        estimar_comision(Red::Regtest, &sim.url, 2, Some(&mala), 0).unwrap_err(),
+        estimar_comision(Red::Regtest, &sim.url, 2, Some(&mala), 0, None).unwrap_err(),
         Error::HuellaServidor(_)
     ));
     // Sin huella, un certificado autofirmado no pasa la validación por raíces públicas.
     assert!(matches!(
-        altura_red(Red::Regtest, &sim.url, None, 0).unwrap_err(),
+        altura_red(Red::Regtest, &sim.url, None, 0, None).unwrap_err(),
         Error::Red(_)
     ));
 }
@@ -1627,7 +1630,15 @@ fn nodo_corte_tras_validar_genesis_y_otra_red_al_volver() {
     let sim = Simulado::arrancar(Network::Regtest);
     let puerto = sim.puerto();
     let url = sim.url.clone();
-    let c = Conexion::abrir(&url, Network::Regtest, None, Duration::from_secs(2), 0).unwrap();
+    let c = Conexion::abrir(
+        &url,
+        Network::Regtest,
+        None,
+        Duration::from_secs(2),
+        0,
+        None,
+    )
+    .unwrap();
     assert_eq!(c.altura().unwrap(), 0);
     // Corte del servidor; en la misma dirección aparece un servidor de OTRA red.
     sim.parar();
@@ -1639,15 +1650,25 @@ fn nodo_corte_tras_validar_genesis_y_otra_red_al_volver() {
     );
     // Un reintento de la capa de arriba repite toda la validación y descubre la red equivocada.
     assert!(matches!(
-        Conexion::abrir(&url, Network::Regtest, None, Duration::from_secs(2), 0),
+        Conexion::abrir(
+            &url,
+            Network::Regtest,
+            None,
+            Duration::from_secs(2),
+            0,
+            None
+        ),
         Err(Error::RedServidor(_))
     ));
     assert!(matches!(
-        comprobar_nodo(Red::Regtest, &url, None, 0).unwrap_err(),
+        comprobar_nodo(Red::Regtest, &url, None, 0, None).unwrap_err(),
         Error::RedServidor(_)
     ));
     // Pedido como signet, el nuevo sí vale.
-    assert_eq!(altura_red(Red::Signet, &otro.url, None, 0).unwrap(), 0);
+    assert_eq!(
+        altura_red(Red::Signet, &otro.url, None, 0, None).unwrap(),
+        0
+    );
 }
 
 #[test]
@@ -1656,11 +1677,11 @@ fn signet_publico_con_huella_equivocada_se_rechaza_tambien_en_comision() {
     // Certificado público válido pero huella fijada distinta: la huella manda, no la CA.
     let mala = "22".repeat(32);
     assert!(matches!(
-        estimar_comision(Red::Signet, SIGNET, 2, Some(&mala), 0).unwrap_err(),
+        estimar_comision(Red::Signet, SIGNET, 2, Some(&mala), 0, None).unwrap_err(),
         Error::HuellaServidor(_)
     ));
     assert!(matches!(
-        altura_red(Red::Signet, SIGNET, Some(&mala), 0).unwrap_err(),
+        altura_red(Red::Signet, SIGNET, Some(&mala), 0, None).unwrap_err(),
         Error::HuellaServidor(_)
     ));
 }
@@ -1785,7 +1806,7 @@ fn puerta_sonda_rechaza_protocolo_distinto_de_1_4() {
     let sim = Simulado::arrancar_tls(Network::Regtest);
     let huella = sim.huella();
     assert_eq!(
-        comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), 0)
+        comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), 0, None)
             .unwrap()
             .protocolo,
         "1.4"
@@ -1793,18 +1814,18 @@ fn puerta_sonda_rechaza_protocolo_distinto_de_1_4() {
     // Mismo servidor, misma huella, mismo génesis: solo cambia el protocolo que anuncia.
     for proto in ["1.0", "1.2", "1.3", "1.5", "2.0", "14", ""] {
         sim.fijar_protocolo(proto);
-        let err = comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), 0).unwrap_err();
+        let err = comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), 0, None).unwrap_err();
         assert!(es_rechazo_protocolo(&err), "protocolo {proto:?}: {err}");
     }
     // También por tcp:// sin huella: la puerta no depende del transporte.
     let plano = Simulado::arrancar(Network::Regtest);
     plano.fijar_protocolo("1.2");
-    let err = comprobar_nodo(Red::Regtest, &plano.url, None, 0).unwrap_err();
+    let err = comprobar_nodo(Red::Regtest, &plano.url, None, 0, None).unwrap_err();
     assert!(es_rechazo_protocolo(&err), "{err}");
     // Las revisiones de 1.4 (1.4.1, 1.4.2) sí valen.
     sim.fijar_protocolo("1.4.2");
     assert_eq!(
-        comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), 0)
+        comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), 0, None)
             .unwrap()
             .protocolo,
         "1.4.2"
@@ -1821,14 +1842,14 @@ fn puerta_sonda_rechaza_altura_que_retrocede_respecto_a_la_vista() {
     assert_eq!(vista, 3);
     // Igual que la vista: sano. Un bloque más: sano.
     assert_eq!(
-        comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), vista)
+        comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), vista, None)
             .unwrap()
             .altura,
         3
     );
     sim.anadir_bloque(txid_cero());
     assert_eq!(
-        comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), vista)
+        comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), vista, None)
             .unwrap()
             .altura,
         4
@@ -1837,16 +1858,16 @@ fn puerta_sonda_rechaza_altura_que_retrocede_respecto_a_la_vista() {
     // cualquier medida: rechazado.
     for atras in [2u32, 1, 0] {
         sim.retroceder_a(atras);
-        let err = comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), vista).unwrap_err();
+        let err = comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), vista, None).unwrap_err();
         assert!(es_rechazo_altura(&err), "retrocede a {atras}: {err}");
     }
     // Un servidor recién instalado (cadena desde cero) tampoco vale si ya se vio más.
     let nuevo = Simulado::arrancar(Network::Regtest);
-    let err = comprobar_nodo(Red::Regtest, &nuevo.url, None, vista).unwrap_err();
+    let err = comprobar_nodo(Red::Regtest, &nuevo.url, None, vista, None).unwrap_err();
     assert!(es_rechazo_altura(&err), "{err}");
     // Sin nada visto (0), ese mismo servidor es aceptable.
     assert_eq!(
-        comprobar_nodo(Red::Regtest, &nuevo.url, None, 0)
+        comprobar_nodo(Red::Regtest, &nuevo.url, None, 0, None)
             .unwrap()
             .altura,
         0
@@ -1984,7 +2005,14 @@ fn puerta_rechazo_previo_por_protocolo_no_toca_fondos_ni_envios() {
     let sim = Simulado::arrancar_tls(Network::Regtest);
     let mut b = billetera_emparejada(dir.path(), &sim);
     let txid = firmar_40k(&mut b).txid;
-    assert!(comprobar_nodo(Red::Regtest, &sim.url, Some(&sim.huella()), b.altura()).is_ok());
+    assert!(comprobar_nodo(
+        Red::Regtest,
+        &sim.url,
+        Some(&sim.huella()),
+        b.altura(),
+        None
+    )
+    .is_ok());
     // Mismo servidor, misma huella y génesis: ahora anuncia otro protocolo.
     sim.fijar_protocolo("1.5");
     exigir_rechazo_previo_sin_tocar_nada(
@@ -2005,7 +2033,14 @@ fn puerta_rechazo_previo_por_altura_no_toca_fondos_ni_envios() {
     let sim = Simulado::arrancar_tls(Network::Regtest);
     let mut b = billetera_emparejada(dir.path(), &sim); // vista: 3
     let txid = firmar_40k(&mut b).txid;
-    assert!(comprobar_nodo(Red::Regtest, &sim.url, Some(&sim.huella()), b.altura()).is_ok());
+    assert!(comprobar_nodo(
+        Red::Regtest,
+        &sim.url,
+        Some(&sim.huella()),
+        b.altura(),
+        None
+    )
+    .is_ok());
     // Mismo servidor: su cadena retrocede por debajo de lo que la billetera ya vio.
     sim.retroceder_a(1);
     exigir_rechazo_previo_sin_tocar_nada(
@@ -2237,11 +2272,11 @@ fn escena_sonda_pasa_y_luego_servidor_malo(estropear: fn(&Simulado)) -> Escena {
     let mut b = billetera_emparejada(dir.path(), &sim);
     let vista = b.altura();
     let txid = firmar_40k(&mut b).txid;
-    let info = comprobar_nodo(Red::Regtest, &sim.url, Some(&sim.huella()), vista).unwrap();
+    let info = comprobar_nodo(Red::Regtest, &sim.url, Some(&sim.huella()), vista, None).unwrap();
     assert_eq!((info.protocolo.as_str(), info.altura), ("1.4", vista));
     estropear(&sim);
     // La sonda, repetida ahora, lo rechaza: el servidor es malo de verdad.
-    assert!(comprobar_nodo(Red::Regtest, &sim.url, Some(&sim.huella()), vista).is_err());
+    assert!(comprobar_nodo(Red::Regtest, &sim.url, Some(&sim.huella()), vista, None).is_err());
     Escena {
         _dir: dir,
         sim,
@@ -2293,14 +2328,27 @@ fn puerta_protocolo_la_conexion_de_difundir_rechaza_al_servidor() {
 #[test]
 fn puerta_protocolo_la_conexion_de_altura_rechaza_al_servidor() {
     let s = escena_sonda_pasa_y_luego_servidor_malo(protocolo_distinto);
-    let r = altura_red(Red::Regtest, &s.sim.url, Some(&s.sim.huella()), s.vista);
+    let r = altura_red(
+        Red::Regtest,
+        &s.sim.url,
+        Some(&s.sim.huella()),
+        s.vista,
+        None,
+    );
     exigir_rechazo("altura_red", r, es_rechazo_protocolo);
 }
 
 #[test]
 fn puerta_protocolo_la_conexion_de_comision_rechaza_al_servidor() {
     let s = escena_sonda_pasa_y_luego_servidor_malo(protocolo_distinto);
-    let r = estimar_comision(Red::Regtest, &s.sim.url, 2, Some(&s.sim.huella()), s.vista);
+    let r = estimar_comision(
+        Red::Regtest,
+        &s.sim.url,
+        2,
+        Some(&s.sim.huella()),
+        s.vista,
+        None,
+    );
     exigir_rechazo("estimar_comision", r, es_rechazo_protocolo);
 }
 
@@ -2340,7 +2388,13 @@ fn puerta_altura_la_conexion_de_difundir_rechaza_al_servidor() {
 fn puerta_altura_la_conexion_de_altura_rechaza_al_servidor() {
     // `altura_red` recibe la última altura vista y la comprueba en su propia conexión.
     let s = escena_sonda_pasa_y_luego_servidor_malo(altura_retrocede);
-    let r = altura_red(Red::Regtest, &s.sim.url, Some(&s.sim.huella()), s.vista);
+    let r = altura_red(
+        Red::Regtest,
+        &s.sim.url,
+        Some(&s.sim.huella()),
+        s.vista,
+        None,
+    );
     exigir_rechazo(
         &format!("altura_red (vista: {})", s.vista),
         r,
@@ -2352,7 +2406,14 @@ fn puerta_altura_la_conexion_de_altura_rechaza_al_servidor() {
 fn puerta_altura_la_conexion_de_comision_rechaza_al_servidor() {
     // Igual que `altura_red`: `estimar_comision` recibe la última altura vista.
     let s = escena_sonda_pasa_y_luego_servidor_malo(altura_retrocede);
-    let r = estimar_comision(Red::Regtest, &s.sim.url, 2, Some(&s.sim.huella()), s.vista);
+    let r = estimar_comision(
+        Red::Regtest,
+        &s.sim.url,
+        2,
+        Some(&s.sim.huella()),
+        s.vista,
+        None,
+    );
     exigir_rechazo(
         &format!("estimar_comision (vista: {})", s.vista),
         r,
@@ -2373,7 +2434,7 @@ fn puerta_sonda_rechaza_protocolos_que_solo_empiezan_por_1_4() {
     let mut aceptados: Vec<String> = Vec::new();
     for proto in ["1.40", "1.45", "1.4basura", "1.4.", "1.4.basura"] {
         sim.fijar_protocolo(proto);
-        match comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), 0) {
+        match comprobar_nodo(Red::Regtest, &sim.url, Some(&huella), 0, None) {
             Err(e) if es_rechazo_protocolo(&e) => {}
             Err(e) => panic!("protocolo {proto:?}: rechazado, pero no por la puerta: {e}"),
             Ok(info) => aceptados.push(format!("{proto:?} (anunciado como {:?})", info.protocolo)),
@@ -2410,7 +2471,7 @@ fn escena_buena_en_la_proxima_y_mala_en_la_siguiente(maldad: Maldad) -> (Escena,
     let mut b = billetera_emparejada(dir.path(), &sim);
     let vista = b.altura();
     let txid = firmar_40k(&mut b).txid;
-    let info = comprobar_nodo(Red::Regtest, &sim.url, Some(&sim.huella()), vista).unwrap();
+    let info = comprobar_nodo(Red::Regtest, &sim.url, Some(&sim.huella()), vista, None).unwrap();
     assert_eq!((info.protocolo.as_str(), info.altura), ("1.4", vista));
     let desde = sim.proxima_conexion();
     let mala_desde = desde + 1;
@@ -2513,16 +2574,29 @@ fn escena_difundir(maldad: Maldad) {
 
 fn escena_altura(maldad: Maldad) {
     let (s, desde, mala) = escena_buena_en_la_proxima_y_mala_en_la_siguiente(maldad);
-    let h = altura_red(Red::Regtest, &s.sim.url, Some(&s.sim.huella()), s.vista)
-        .expect("la próxima conexión es buena");
+    let h = altura_red(
+        Red::Regtest,
+        &s.sim.url,
+        Some(&s.sim.huella()),
+        s.vista,
+        None,
+    )
+    .expect("la próxima conexión es buena");
     assert_eq!(h, s.vista);
     exigir_validada_y_operada_en_la_misma_conexion(&s.sim, desde, mala, ALTURA);
 }
 
 fn escena_comision(maldad: Maldad) {
     let (s, desde, mala) = escena_buena_en_la_proxima_y_mala_en_la_siguiente(maldad);
-    let c = estimar_comision(Red::Regtest, &s.sim.url, 2, Some(&s.sim.huella()), s.vista)
-        .expect("la próxima conexión es buena");
+    let c = estimar_comision(
+        Red::Regtest,
+        &s.sim.url,
+        2,
+        Some(&s.sim.huella()),
+        s.vista,
+        None,
+    )
+    .expect("la próxima conexión es buena");
     assert_eq!(c, 2.0);
     exigir_validada_y_operada_en_la_misma_conexion(&s.sim, desde, mala, OP_COMISION);
 }
@@ -2709,7 +2783,8 @@ fn exigir_aborto_por_altura_durante_bdk(op: &str, secuencia: Vec<u32>) {
         Red::Regtest,
         &sim.url,
         huella_de(&sim).as_deref(),
-        b.altura()
+        b.altura(),
+        None
     )
     .is_ok());
     let desde = sim.proxima_conexion();
@@ -2763,7 +2838,8 @@ fn puerta_altura_red_devuelve_la_altura_validada_sin_segunda_consulta() {
             Red::Regtest,
             &sim.url,
             huella_de(&sim).as_deref(),
-            b.altura()
+            b.altura(),
+            None
         )
         .unwrap(),
         3
@@ -2797,14 +2873,22 @@ fn exigir_una_sola_negociacion(sim: &Simulado) {
         EstadoEnvio::Enviada
     );
     assert_eq!(
-        altura_red(Red::Regtest, &sim.url, huella.as_deref(), b.altura()).unwrap(),
+        altura_red(Red::Regtest, &sim.url, huella.as_deref(), b.altura(), None).unwrap(),
         3
     );
     assert_eq!(
-        estimar_comision(Red::Regtest, &sim.url, 2, huella.as_deref(), b.altura()).unwrap(),
+        estimar_comision(
+            Red::Regtest,
+            &sim.url,
+            2,
+            huella.as_deref(),
+            b.altura(),
+            None
+        )
+        .unwrap(),
         2.0
     );
-    let info = comprobar_nodo(Red::Regtest, &sim.url, huella.as_deref(), b.altura()).unwrap();
+    let info = comprobar_nodo(Red::Regtest, &sim.url, huella.as_deref(), b.altura(), None).unwrap();
     assert_eq!(
         info.protocolo, "1.4",
         "la versión negociada es la que el motor propone"
@@ -2836,16 +2920,16 @@ fn exigir_rechazo_por_version_negociada(sim: &Simulado) {
     let txid = firmar_40k(&mut b).txid;
     let huella = huella_de(sim);
     sim.fijar_protocolo_negociado("1.6");
-    let err = comprobar_nodo(Red::Regtest, &sim.url, huella.as_deref(), 0).unwrap_err();
+    let err = comprobar_nodo(Red::Regtest, &sim.url, huella.as_deref(), 0, None).unwrap_err();
     assert!(es_rechazo_protocolo(&err), "{err}");
     exigir_rechazo(
         "altura_red",
-        altura_red(Red::Regtest, &sim.url, huella.as_deref(), 0),
+        altura_red(Red::Regtest, &sim.url, huella.as_deref(), 0, None),
         es_rechazo_protocolo,
     );
     exigir_rechazo(
         "estimar_comision",
-        estimar_comision(Red::Regtest, &sim.url, 2, huella.as_deref(), 0),
+        estimar_comision(Red::Regtest, &sim.url, 2, huella.as_deref(), 0, None),
         es_rechazo_protocolo,
     );
     exigir_rechazo_previo_sin_tocar_nada(
@@ -2961,14 +3045,22 @@ fn exigir_negociacion_como_primer_mensaje(sim: &Simulado) {
         EstadoEnvio::Enviada
     );
     assert_eq!(
-        altura_red(Red::Regtest, &sim.url, huella.as_deref(), b.altura()).unwrap(),
+        altura_red(Red::Regtest, &sim.url, huella.as_deref(), b.altura(), None).unwrap(),
         3
     );
     assert_eq!(
-        estimar_comision(Red::Regtest, &sim.url, 2, huella.as_deref(), b.altura()).unwrap(),
+        estimar_comision(
+            Red::Regtest,
+            &sim.url,
+            2,
+            huella.as_deref(),
+            b.altura(),
+            None
+        )
+        .unwrap(),
         2.0
     );
-    assert!(comprobar_nodo(Red::Regtest, &sim.url, huella.as_deref(), b.altura()).is_ok());
+    assert!(comprobar_nodo(Red::Regtest, &sim.url, huella.as_deref(), b.altura(), None).is_ok());
     for (id, metodos) in metodos_desde(sim, desde) {
         assert_eq!(
             metodos.first().map(String::as_str),
@@ -2999,7 +3091,15 @@ fn puerta_una_conexion_caida_no_se_reabre_sola_y_la_siguiente_pasa_las_cuatro_pu
     let sim = Simulado::arrancar(Network::Regtest);
     let puerto = sim.puerto();
     let mut b = billetera_emparejada(dir.path(), &sim); // vista: 3
-    let c = Conexion::abrir(&sim.url, Network::Regtest, None, Duration::from_secs(2), 3).unwrap();
+    let c = Conexion::abrir(
+        &sim.url,
+        Network::Regtest,
+        None,
+        Duration::from_secs(2),
+        3,
+        None,
+    )
+    .unwrap();
     assert_eq!(c.altura().unwrap(), 3);
     sim.parar();
     let otro = Simulado::arrancar_en(puerto, Network::Regtest);
@@ -3025,7 +3125,7 @@ fn puerta_una_conexion_caida_no_se_reabre_sola_y_la_siguiente_pasa_las_cuatro_pu
     crecer_hasta(&otro, None, 3);
     let desde = otro.proxima_conexion();
     assert_eq!(
-        altura_red(Red::Regtest, &otro.url, None, b.altura()).unwrap(),
+        altura_red(Red::Regtest, &otro.url, None, b.altura(), None).unwrap(),
         3
     );
     assert_eq!(
@@ -3063,4 +3163,656 @@ fn vigilado_marca_de_altura_maxima_es_atomica_y_sube() {
         assert!(err.contains("fuera de rango"), "{err}");
         assert!(v.comprobar_altura(500).is_ok(), "la marca sigue en 500");
     }
+}
+
+// ----- Selector de nodo: proxy SOCKS5 (.onion) y huella observada del certificado -----------
+
+/// Proxy SOCKS5 falso en la interfaz local: acepta CONNECT sin autenticación, apunta el destino
+/// (nombre o IP y puerto) que pidió el cliente y reenvía al simulado `destino_real` IGNORANDO el
+/// nombre pedido (como haría Tor con un `.onion`). Con `rechazar` responde ese código de error.
+struct ProxyFalso {
+    direccion: String,
+    pedidos: Arc<Mutex<Vec<(String, u16)>>>,
+    vivo: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl ProxyFalso {
+    fn arrancar(destino_real: &str, rechazar: Option<u8>) -> ProxyFalso {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let escucha = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        escucha.set_nonblocking(true).unwrap();
+        let direccion = escucha.local_addr().unwrap().to_string();
+        let pedidos = Arc::new(Mutex::new(Vec::new()));
+        let vivo = Arc::new(AtomicBool::new(true));
+        let (p2, v2, destino) = (pedidos.clone(), vivo.clone(), destino_real.to_string());
+        std::thread::spawn(move || {
+            while v2.load(Ordering::SeqCst) {
+                match escucha.accept() {
+                    Ok((s, _)) => {
+                        let (p, d) = (p2.clone(), destino.clone());
+                        std::thread::spawn(move || atender_socks5(s, &d, rechazar, &p));
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5))
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        ProxyFalso {
+            direccion,
+            pedidos,
+            vivo,
+        }
+    }
+
+    fn pedidos(&self) -> Vec<(String, u16)> {
+        self.pedidos.lock().unwrap().clone()
+    }
+}
+
+impl Drop for ProxyFalso {
+    fn drop(&mut self) {
+        self.vivo.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+fn atender_socks5(
+    mut c: std::net::TcpStream,
+    destino_real: &str,
+    rechazar: Option<u8>,
+    pedidos: &Mutex<Vec<(String, u16)>>,
+) {
+    use std::io::{Read, Write};
+    use std::net::{Ipv4Addr, Ipv6Addr, Shutdown, TcpStream};
+    let mut saludo = [0u8; 2];
+    if c.read_exact(&mut saludo).is_err() {
+        return;
+    }
+    assert_eq!(saludo[0], 5, "versión SOCKS5");
+    let mut metodos = vec![0u8; saludo[1] as usize];
+    c.read_exact(&mut metodos).unwrap();
+    assert!(
+        metodos.contains(&0),
+        "el motor debe ofrecer «sin autenticación»"
+    );
+    c.write_all(&[5, 0]).unwrap();
+    let mut cab = [0u8; 4];
+    c.read_exact(&mut cab).unwrap();
+    assert_eq!(&cab[..3], &[5, 1, 0], "CONNECT");
+    let host = match cab[3] {
+        1 => {
+            let mut ip = [0u8; 4];
+            c.read_exact(&mut ip).unwrap();
+            Ipv4Addr::from(ip).to_string()
+        }
+        3 => {
+            let mut l = [0u8; 1];
+            c.read_exact(&mut l).unwrap();
+            let mut h = vec![0u8; l[0] as usize];
+            c.read_exact(&mut h).unwrap();
+            String::from_utf8(h).unwrap()
+        }
+        4 => {
+            let mut ip = [0u8; 16];
+            c.read_exact(&mut ip).unwrap();
+            Ipv6Addr::from(ip).to_string()
+        }
+        otro => panic!("tipo de dirección {otro}"),
+    };
+    let mut p = [0u8; 2];
+    c.read_exact(&mut p).unwrap();
+    pedidos.lock().unwrap().push((host, u16::from_be_bytes(p)));
+    if let Some(codigo) = rechazar {
+        c.write_all(&[5, codigo, 0, 1, 0, 0, 0, 0, 0, 0]).unwrap();
+        return;
+    }
+    let mut s = match TcpStream::connect(destino_real) {
+        Ok(s) => s,
+        Err(_) => {
+            c.write_all(&[5, 5, 0, 1, 0, 0, 0, 0, 0, 0]).unwrap();
+            return;
+        }
+    };
+    c.write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 0]).unwrap();
+    let (mut c2, mut s2) = (c.try_clone().unwrap(), s.try_clone().unwrap());
+    let ida = std::thread::spawn(move || {
+        let _ = std::io::copy(&mut s2, &mut c2);
+        let _ = c2.shutdown(Shutdown::Write);
+    });
+    let _ = std::io::copy(&mut c, &mut s);
+    let _ = s.shutdown(Shutdown::Write);
+    let _ = ida.join();
+}
+
+fn host_puerto(url: &str) -> String {
+    url.split("://").nth(1).unwrap().to_string()
+}
+
+#[test]
+fn nodo_onion_sin_proxy_se_rechaza_antes_de_abrir_socket() {
+    use crate::nodo::Destino;
+    assert!(Destino::analizar("tcp://abcdefghijklmnop.ONION:50001")
+        .unwrap()
+        .es_onion());
+    assert!(!Destino::analizar("tcp://nodo.onion.ejemplo.local:50001")
+        .unwrap()
+        .es_onion());
+    // Sin proxy: error claro, y ni un socket: el nombre no se resuelve (no hay DNS que lo
+    // resuelva) y el tiempo es inmediato.
+    let t0 = std::time::Instant::now();
+    for (res, que) in [
+        (
+            comprobar_nodo(
+                Red::Regtest,
+                "tcp://abcdefghijklmnop.onion:50001",
+                None,
+                0,
+                None,
+            )
+            .map(|_| ()),
+            "sonda",
+        ),
+        (
+            altura_red(
+                Red::Regtest,
+                "tcp://abcdefghijklmnop.onion:50001",
+                None,
+                0,
+                None,
+            )
+            .map(|_| ()),
+            "altura",
+        ),
+        (
+            huella_servidor("ssl://abcdefghijklmnop.onion:50002", None).map(|_| ()),
+            "huella",
+        ),
+    ] {
+        let err = res.unwrap_err();
+        assert!(
+            matches!(err, Error::Red(ref m) if m.contains("proxy SOCKS5") && m.contains(".onion")),
+            "{que}: {err}"
+        );
+    }
+    // Un proxy en blanco es «sin proxy».
+    assert!(matches!(
+        comprobar_nodo(Red::Regtest, "tcp://abcdefghijklmnop.onion:50001", None, 0, Some("  ")).unwrap_err(),
+        Error::Red(ref m) if m.contains("proxy SOCKS5")
+    ));
+    assert!(
+        t0.elapsed() < Duration::from_secs(2),
+        "no debe haber intentado nada por la red"
+    );
+    // La billetera entera: con un .onion y sin proxy, ninguna operación abre socket.
+    let dir = tempfile::tempdir().unwrap();
+    let sim = Simulado::arrancar(Network::Regtest);
+    let mut b = billetera_regtest(dir.path(), &sim);
+    let antes = sim.proxima_conexion();
+    let err = b
+        .sincronizar("tcp://abcdefghijklmnop.onion:50001")
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::Red(ref m) if m.contains("proxy SOCKS5")),
+        "{err}"
+    );
+    assert_eq!(sim.proxima_conexion(), antes, "ninguna conexión nueva");
+}
+
+#[test]
+fn nodo_por_proxy_socks5_llega_al_servidor_y_el_nombre_lo_resuelve_el_proxy() {
+    let sim = Simulado::arrancar(Network::Regtest);
+    let proxy = ProxyFalso::arrancar(&host_puerto(&sim.url), None);
+    // El nombre .onion viaja tal cual al proxy (ATYP 3); este proceso no lo resuelve.
+    let info = comprobar_nodo(
+        Red::Regtest,
+        "tcp://nodo-de-prueba.onion:50001",
+        None,
+        0,
+        Some(&proxy.direccion),
+    )
+    .unwrap();
+    assert_eq!(info.altura, 0);
+    assert_eq!(info.red, Red::Regtest);
+    assert!(!info.cifrado);
+    assert_eq!(info.servidor, "tcp://nodo-de-prueba.onion:50001");
+    assert_eq!(
+        proxy.pedidos(),
+        vec![("nodo-de-prueba.onion".to_string(), 50001)]
+    );
+    // Las funciones libres también pasan por el proxy.
+    assert_eq!(
+        altura_red(
+            Red::Regtest,
+            "tcp://otro.onion:1",
+            None,
+            0,
+            Some(&proxy.direccion)
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        estimar_comision(
+            Red::Regtest,
+            "tcp://otro.onion:1",
+            2,
+            None,
+            0,
+            Some(&proxy.direccion)
+        )
+        .unwrap(),
+        2.0
+    );
+    // Una IP literal se pide como IP (ATYP 1), no como nombre.
+    comprobar_nodo(Red::Regtest, &sim.url, None, 0, Some(&proxy.direccion)).unwrap();
+    let pedidos = proxy.pedidos();
+    assert_eq!(pedidos.len(), 4);
+    assert_eq!(pedidos[3].0, "127.0.0.1");
+    assert_eq!(pedidos[3].1, sim.puerto());
+    // La billetera: TODAS sus operaciones van por el proxy una vez fijado (escaneo con fondos,
+    // sincronización, difusión), y las puertas se pasan igual (génesis de otra red → rechazo).
+    let dir = tempfile::tempdir().unwrap();
+    let mut b = billetera_regtest(dir.path(), &sim);
+    b.fijar_proxy(Some(proxy.direccion.clone()));
+    let txid = fondear(&mut b, &sim, FONDOS);
+    let antes = proxy.pedidos().len();
+    b.sincronizar("tcp://billetera.onion:50001").unwrap();
+    // billetera_regtest ya trae un depósito de FONDOS; este es el segundo.
+    assert_eq!(b.saldo().total, 2 * FONDOS);
+    assert!(b.movimientos().iter().any(|m| m.txid == txid.to_string()));
+    assert!(
+        proxy.pedidos().len() > antes,
+        "la sincronización pasó por el proxy"
+    );
+    assert!(proxy
+        .pedidos()
+        .iter()
+        .skip(antes)
+        .all(|(h, p)| h == "billetera.onion" && *p == 50001));
+    assert!(matches!(
+        b.sincronizar("tcp://billetera.onion:50001")
+            .and_then(|_| comprobar_nodo(
+                Red::Signet,
+                "tcp://x.onion:1",
+                None,
+                0,
+                Some(&proxy.direccion)
+            )
+            .map(|_| ()))
+            .unwrap_err(),
+        Error::RedServidor(_)
+    ));
+}
+
+#[test]
+fn nodo_por_proxy_socks5_con_tls_la_huella_sigue_mandando() {
+    let sim = Simulado::arrancar_tls(Network::Regtest);
+    let proxy = ProxyFalso::arrancar(&host_puerto(&sim.url), None);
+    let buena = sim.huella();
+    let info = comprobar_nodo(
+        Red::Regtest,
+        "ssl://nodo-tls.onion:50002",
+        Some(&buena),
+        0,
+        Some(&proxy.direccion),
+    )
+    .unwrap();
+    assert!(info.cifrado);
+    assert_eq!(info.huella_vista, buena);
+    // Huella equivocada: el apretón TLS falla dentro del túnel del proxy, igual que en directo.
+    let err = comprobar_nodo(
+        Red::Regtest,
+        "ssl://nodo-tls.onion:50002",
+        Some(&"11".repeat(32)),
+        0,
+        Some(&proxy.direccion),
+    )
+    .unwrap_err();
+    assert!(matches!(err, Error::HuellaServidor(_)), "{err}");
+    // Sin huella, el autofirmado no pasa por raíces públicas, tampoco por el proxy.
+    assert!(matches!(
+        comprobar_nodo(
+            Red::Regtest,
+            "ssl://nodo-tls.onion:50002",
+            None,
+            0,
+            Some(&proxy.direccion)
+        )
+        .unwrap_err(),
+        Error::Red(_)
+    ));
+    // Pero su huella se puede OBSERVAR a través del proxy para mostrársela al usuario.
+    assert_eq!(
+        huella_servidor("ssl://nodo-tls.onion:50002", Some(&proxy.direccion)).unwrap(),
+        buena
+    );
+    assert_eq!(proxy.pedidos().len(), 4);
+}
+
+#[test]
+fn nodo_proxy_que_rechaza_falta_o_esta_mal_escrito_da_error_claro() {
+    let sim = Simulado::arrancar(Network::Regtest);
+    // El proxy responde «servidor inalcanzable» (0x04): el texto lo dice y nombra el destino.
+    let rechaza = ProxyFalso::arrancar(&host_puerto(&sim.url), Some(4));
+    let err = comprobar_nodo(
+        Red::Regtest,
+        "tcp://caido.onion:50001",
+        None,
+        0,
+        Some(&rechaza.direccion),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, Error::Red(ref m) if m.contains("proxy SOCKS5") && m.contains("inalcanzable") && m.contains("caido.onion:50001")),
+        "{err}"
+    );
+    assert_eq!(sim.proxima_conexion(), 1, "el simulado no recibió nada");
+    // Nadie escucha donde se dice que está el proxy (un puerto local que acabamos de soltar).
+    let libre = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().to_string()
+    };
+    let err = comprobar_nodo(Red::Regtest, "tcp://x.onion:1", None, 0, Some(&libre)).unwrap_err();
+    assert!(
+        matches!(err, Error::Red(ref m) if m.contains(&format!("proxy SOCKS5 {libre}"))),
+        "{err}"
+    );
+    // Proxy mal escrito: se dice la forma esperada.
+    for malo in ["127.0.0.1", "127.0.0.1:abc", ":9050"] {
+        let err = comprobar_nodo(Red::Regtest, "tcp://x.onion:1", None, 0, Some(malo)).unwrap_err();
+        assert!(
+            matches!(err, Error::Red(ref m) if m.contains("proxy SOCKS5")),
+            "{malo}: {err}"
+        );
+    }
+    // Y algo que escucha pero no habla SOCKS5 (acepta y cuelga): no se confunde con éxito.
+    let mudo = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let dir_mudo = mudo.local_addr().unwrap().to_string();
+    std::thread::spawn(move || {
+        if let Ok((s, _)) = mudo.accept() {
+            drop(s);
+        }
+    });
+    let err =
+        comprobar_nodo(Red::Regtest, "tcp://x.onion:1", None, 0, Some(&dir_mudo)).unwrap_err();
+    assert!(
+        matches!(err, Error::Red(ref m) if m.contains("proxy SOCKS5") && m.contains("saludo")),
+        "{err}"
+    );
+}
+
+/// Auditoría del cierre, punto 1 (proxy): en modo «Mi nodo» con proxy el NOMBRE del servidor no se
+/// resuelve en este proceso. Un nombre bajo `.invalid` (RFC 6761: ningún resolutor lo resuelve
+/// jamás) llega tal cual al proxy (ATYP 3), con `tcp://` y con `ssl://` (SNI con el nombre, sin
+/// DNS), para la sonda, las funciones libres y TODAS las conexiones de la billetera. Si el motor
+/// resolviera localmente, la conexión fallaría en «resolviendo …» y la prueba también.
+#[test]
+fn nodo_por_proxy_el_nombre_de_mi_nodo_no_se_resuelve_en_este_proceso() {
+    let sim = Simulado::arrancar(Network::Regtest);
+    let proxy = ProxyFalso::arrancar(&host_puerto(&sim.url), None);
+    let info = comprobar_nodo(
+        Red::Regtest,
+        "tcp://mi-nodo.invalid:50001",
+        None,
+        0,
+        Some(&proxy.direccion),
+    )
+    .unwrap();
+    assert_eq!(info.servidor, "tcp://mi-nodo.invalid:50001");
+    assert_eq!(
+        proxy.pedidos(),
+        vec![("mi-nodo.invalid".to_string(), 50001)],
+        "el proxy recibe el nombre tal cual"
+    );
+    altura_red(
+        Red::Regtest,
+        "tcp://MI-NODO.INVALID:50001",
+        None,
+        0,
+        Some(&proxy.direccion),
+    )
+    .unwrap();
+    estimar_comision(
+        Red::Regtest,
+        "tcp://mi-nodo.invalid:50001",
+        2,
+        None,
+        0,
+        Some(&proxy.direccion),
+    )
+    .unwrap();
+    // La billetera entera, con el proxy fijado: escaneo, sincronización y difusión.
+    let dir = tempfile::tempdir().unwrap();
+    let mut b = billetera_regtest(dir.path(), &sim);
+    b.fijar_proxy(Some(proxy.direccion.clone()));
+    fondear(&mut b, &sim, FONDOS);
+    b.sincronizar("tcp://mi-nodo.invalid:50001").unwrap();
+    assert_eq!(b.saldo().total, 2 * FONDOS);
+    let e = firmar_40k(&mut b);
+    assert_eq!(
+        b.difundir("tcp://mi-nodo.invalid:50001", &e.txid)
+            .unwrap()
+            .estado,
+        EstadoEnvio::Enviada
+    );
+    let pedidos = proxy.pedidos();
+    assert!(pedidos.len() >= 5, "{pedidos:?}");
+    assert!(
+        pedidos
+            .iter()
+            .all(|(h, p)| h.eq_ignore_ascii_case("mi-nodo.invalid") && *p == 50001),
+        "ningún pedido al proxy lleva una IP: nadie resolvió el nombre: {pedidos:?}"
+    );
+    // Lo mismo con TLS: el nombre va en el SNI y al proxy, la huella se comprueba igual.
+    let tls = Simulado::arrancar_tls(Network::Regtest);
+    let proxy_tls = ProxyFalso::arrancar(&host_puerto(&tls.url), None);
+    let info = comprobar_nodo(
+        Red::Regtest,
+        "ssl://mi-nodo.invalid:50002",
+        Some(&tls.huella()),
+        0,
+        Some(&proxy_tls.direccion),
+    )
+    .unwrap();
+    assert!(info.cifrado);
+    assert_eq!(info.huella_vista, tls.huella());
+    assert_eq!(
+        huella_servidor("ssl://mi-nodo.invalid:50002", Some(&proxy_tls.direccion)).unwrap(),
+        tls.huella()
+    );
+    assert!(proxy_tls
+        .pedidos()
+        .iter()
+        .all(|(h, p)| h == "mi-nodo.invalid" && *p == 50002));
+    // Contraste: sin proxy el nombre tendría que resolverse aquí y `.invalid` no resuelve nunca;
+    // el error es el de la resolución y el simulado no recibe ninguna conexión más.
+    let antes = sim.conexiones().len();
+    let err =
+        comprobar_nodo(Red::Regtest, "tcp://mi-nodo.invalid:50001", None, 0, None).unwrap_err();
+    assert!(
+        matches!(err, Error::Red(ref m) if m.contains("resolviendo") || m.contains("no se pudo conectar")),
+        "{err}"
+    );
+    assert_eq!(sim.conexiones().len(), antes);
+}
+
+/// Auditoría del cierre, punto 2 (génesis): un servidor que contesta bien a `server.version` pero
+/// falla en `server.features` (el mensaje que trae el `genesis_hash`) se rechaza en la sonda y en
+/// cada operación de la billetera, y NO se toca nada: ni un byte de los ficheros ni la memoria de
+/// la billetera; la conexión rechazada pidió exactamente `server.version` y `server.features` y
+/// nada más (ni cabeceras ni historial). Cuando `server.features` vuelve a funcionar, todo sigue.
+#[test]
+fn puerta_genesis_servidor_que_negocia_pero_falla_en_features_se_rechaza_sin_tocar_nada() {
+    let dir = tempfile::tempdir().unwrap();
+    let sim = Simulado::arrancar(Network::Regtest);
+    let mut b = billetera_regtest(dir.path(), &sim);
+    fondear(&mut b, &sim, FONDOS);
+    b.sincronizar(&sim.url).unwrap();
+    let e = firmar_40k(&mut b);
+    let (antes_disco, antes_mem) = (instantanea(dir.path()), memoria(&b));
+    let conexiones_antes = sim.conexiones().len();
+    sim.fijar_features_falla(true);
+    // La sonda.
+    let err = comprobar_nodo(Red::Regtest, &sim.url, None, 0, None).unwrap_err();
+    assert!(
+        matches!(err, Error::Red(ref m) if m.contains("server.features")),
+        "{err}"
+    );
+    assert!(
+        !es_rechazo_red(&err),
+        "no es «otra red»: es que no pudo comprobarse"
+    );
+    // Cada operación de la billetera.
+    assert!(b.sincronizar(&sim.url).is_err());
+    assert!(b.escanear(&sim.url).is_err());
+    assert!(b.difundir(&sim.url, &e.txid).is_err());
+    assert!(altura_red(Red::Regtest, &sim.url, None, 0, None).is_err());
+    assert!(estimar_comision(Red::Regtest, &sim.url, 2, None, 0, None).is_err());
+    // Nada tocado: disco byte a byte, memoria, y el envío sigue Firmada con 0 intentos.
+    assert_eq!(
+        ficheros_distintos(&antes_disco, &instantanea(dir.path())),
+        Vec::<String>::new()
+    );
+    assert_eq!(memoria(&b), antes_mem);
+    let ee = b.estado_envio(&e.txid).unwrap();
+    assert_eq!((ee.estado, ee.intentos_difusion), (EstadoEnvio::Firmada, 0));
+    assert!(sim.difundidas().is_empty());
+    // Cada conexión rechazada habló `server.version` y `server.features`, y nada más.
+    let nuevas: Vec<_> = sim
+        .conexiones()
+        .into_iter()
+        .skip(conexiones_antes)
+        .collect();
+    assert_eq!(nuevas.len(), 6, "{nuevas:?}");
+    for (_, metodos) in &nuevas {
+        assert_eq!(
+            metodos,
+            &vec!["server.version".to_string(), "server.features".to_string()],
+            "{nuevas:?}"
+        );
+    }
+    // Arreglado el servidor, la misma billetera sigue sin más.
+    sim.fijar_features_falla(false);
+    b.sincronizar(&sim.url).unwrap();
+    assert_eq!(
+        b.difundir(&sim.url, &e.txid).unwrap().estado,
+        EstadoEnvio::Enviada
+    );
+}
+
+#[test]
+fn nodo_huella_servidor_observa_el_spki_sin_hablar_electrum() {
+    let sim = Simulado::arrancar_tls(Network::Regtest);
+    assert_eq!(huella_servidor(&sim.url, None).unwrap(), sim.huella());
+    // Solo el apretón de manos: la conexión que vio el simulado no pidió ningún método.
+    let conexiones = sim.conexiones();
+    assert_eq!(conexiones.len(), 1, "{conexiones:?}");
+    assert!(
+        conexiones[0].1.is_empty(),
+        "sin mensajes Electrum: {conexiones:?}"
+    );
+    // Con tcp:// no hay certificado que observar.
+    let plano = Simulado::arrancar(Network::Regtest);
+    assert!(matches!(
+        huella_servidor(&plano.url, None).unwrap_err(),
+        Error::Red(ref m) if m.contains("solo existe con ssl://")
+    ));
+    assert_eq!(plano.proxima_conexion(), 1);
+    // Observar NO es validar: la huella observada solo sirve una vez FIJADA por quien llama.
+    let mala = "33".repeat(32);
+    assert!(matches!(
+        comprobar_nodo(Red::Regtest, &sim.url, Some(&mala), 0, None).unwrap_err(),
+        Error::HuellaServidor(_)
+    ));
+    assert!(comprobar_nodo(
+        Red::Regtest,
+        &sim.url,
+        Some(&huella_servidor(&sim.url, None).unwrap()),
+        0,
+        None
+    )
+    .is_ok());
+}
+
+/// Banco regtest local real (Bitcoin Core + electrs 0.11.1 en `tcp://127.0.0.1:60401`, ver
+/// `~/x39-regtest`): `cargo test --features mainnet -- --ignored banco_regtest`. Mismas puertas
+/// que con el simulado, ahora contra un electrs de verdad: sonda sana con versión, altura y red;
+/// otra red rechazada por génesis; `.onion` sin proxy rechazado; y la misma sonda a través de un
+/// proxy SOCKS5 (falso, local) que reenvía al electrs real.
+#[test]
+#[ignore]
+fn banco_regtest_selector_nodo_sonda_otra_red_y_proxy() {
+    const BANCO: &str = "tcp://127.0.0.1:60401";
+    let info = comprobar_nodo(Red::Regtest, BANCO, None, 0, None).unwrap();
+    println!(
+        "electrs real: servidor «{}», protocolo {}, altura {}, red {}, {} ms, cifrado {}",
+        info.version_servidor,
+        info.protocolo,
+        info.altura,
+        info.red,
+        info.latencia_ms,
+        info.cifrado
+    );
+    assert!(
+        info.version_servidor.to_lowercase().contains("electrs"),
+        "{}",
+        info.version_servidor
+    );
+    assert!(crate::nodo::protocolo_admitido(&info.protocolo));
+    assert_eq!(info.red, Red::Regtest);
+    assert!(!info.cifrado);
+    // P3: pedido como signet (o mainnet), el génesis no cuadra → rechazado.
+    let err = comprobar_nodo(Red::Signet, BANCO, None, 0, None).unwrap_err();
+    println!("pedido como signet: {err}");
+    assert!(matches!(err, Error::RedServidor(_)), "{err}");
+    let err = comprobar_nodo(Red::Mainnet, BANCO, None, 0, None).unwrap_err();
+    println!("pedido como mainnet: {err}");
+    assert!(
+        matches!(err, Error::RedServidor(_)) || matches!(err, Error::RedProhibida),
+        "{err}"
+    );
+    // La altura validada coincide con la de la sonda.
+    assert_eq!(
+        altura_red(Red::Regtest, BANCO, None, 0, None).unwrap(),
+        info.altura
+    );
+    // Un servidor por debajo de lo ya visto se rechaza.
+    let err = comprobar_nodo(Red::Regtest, BANCO, None, info.altura + 10, None).unwrap_err();
+    println!("altura exigida +10: {err}");
+    assert!(
+        matches!(err, Error::Red(ref m) if m.contains("va por detrás")),
+        "{err}"
+    );
+    // .onion sin proxy: ni un socket.
+    let err = comprobar_nodo(
+        Red::Regtest,
+        "tcp://abcdefghijklmnop.onion:50001",
+        None,
+        0,
+        None,
+    )
+    .unwrap_err();
+    println!(".onion sin proxy: {err}");
+    assert!(matches!(err, Error::Red(ref m) if m.contains("proxy SOCKS5")));
+    // Y la misma sonda por un proxy SOCKS5 local que reenvía al electrs real.
+    let proxy = ProxyFalso::arrancar("127.0.0.1:60401", None);
+    let por_proxy = comprobar_nodo(
+        Red::Regtest,
+        "tcp://banco-regtest.onion:60401",
+        None,
+        0,
+        Some(&proxy.direccion),
+    )
+    .unwrap();
+    println!(
+        "por proxy SOCKS5 {}: altura {}, servidor «{}»",
+        proxy.direccion, por_proxy.altura, por_proxy.version_servidor
+    );
+    assert_eq!(por_proxy.altura, info.altura);
+    assert_eq!(por_proxy.version_servidor, info.version_servidor);
+    assert_eq!(
+        proxy.pedidos(),
+        vec![("banco-regtest.onion".to_string(), 60401)]
+    );
 }

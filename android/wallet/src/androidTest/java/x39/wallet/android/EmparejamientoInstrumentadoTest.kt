@@ -4,6 +4,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import x39.wallet.Red
@@ -37,6 +38,7 @@ class EmparejamientoInstrumentadoTest {
 
     @Test
     fun elPaqueteValidoSeAceptaEnAndroid() {
+        assumeTrue("solo en la edición de prueba (signet); en mainnet no aplica", Redes.permitida(Red.SIGNET))
         val p = Emparejamiento.analizar(paquete(), Red.SIGNET, ahora)
         assertEquals("mi nodo", p.nombre)
         assertEquals(huella, p.huellaSpki)
@@ -76,6 +78,7 @@ class EmparejamientoInstrumentadoTest {
 
     @Test
     fun fechasConAnchurasExactas_yRobustezAnteMilesDePalabras() {
+        assumeTrue("solo en la edición de prueba (signet); en mainnet no aplica", Redes.permitida(Red.SIGNET))
         assertTrue(rechazo(paquete(caduca = "\"2026-1-1T22:0:0Z\"")).contains("exactamente la forma"))
         assertTrue(rechazo(paquete(emitido = "\"2025-02-30T23:00:00Z\"", caduca = "\"2025-03-01T22:00:00Z\"")).contains("calendario"))
         val m = rechazo(paquete(nombre = "\"${"a ".repeat(7000)}\""))
@@ -85,6 +88,7 @@ class EmparejamientoInstrumentadoTest {
 
     @Test
     fun semillaPegadaAPuntuacion_seRechaza_yMilesDePalabrasNoDesbordan() {
+        assumeTrue("solo en la edición de prueba (signet); en mainnet no aplica", Redes.permitida(Red.SIGNET))
         val zoo = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong"
         for (n in listOf("copia:$zoo", "$zoo.", "($zoo)", "copia: $zoo", "nodo $wif.")) {
             val m = rechazo(paquete(nombre = "\"$n\""))
@@ -97,6 +101,7 @@ class EmparejamientoInstrumentadoTest {
 
     @Test
     fun fechasEstrictas_eIpv6Literal() {
+        assumeTrue("solo en la edición de prueba (signet); en mainnet no aplica", Redes.permitida(Red.SIGNET))
         assertTrue(rechazo(paquete(emitido = "\"2025-12-31T23:00:00Z+09:00\"")).contains("exactamente la forma"))
         assertTrue(rechazo(paquete(caduca = "\"2026-01-01T00:00:00Z\"")).contains("caducó")) // caduca == ahora
         Emparejamiento.analizar(paquete(caduca = "\"2026-01-01T00:00:01Z\""), Red.SIGNET, ahora)

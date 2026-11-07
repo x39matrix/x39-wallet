@@ -19,6 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import x39.wallet.R
 
 /**
  * «Emparejar con mi nodo»: importa un paquete de emparejamiento (fichero JSON o QR con la
@@ -48,25 +49,25 @@ class EmparejarActivity : BaseActivity() {
     }
     private val permisoCamara = registerForActivityResult(ActivityResultContracts.RequestPermission()) { concedido ->
         if (concedido) escanear.launch(Intent(this, EscanearQrActivity::class.java))
-        else aviso("Sin permiso de cámara no se puede escanear; importa el paquete como fichero")
+        else aviso(getString(R.string.x39w_emp_sin_camara))
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val col = Estilo.columna(this)
-        col.addView(cabecera("Emparejar con mi nodo"))
-        col.addView(Estilo.texto(this, "El paquete lo genera tu nodo (herramientas/nodo/emparejar.sh) y solo trae datos públicos: red, servidor Electrum, huella de su certificado, nombre y caducidad (24 h como máximo); opcionalmente los datos públicos del túnel. Se valida entero antes de tocar nada y se guarda SOLO si el nodo responde sano.", 12f, Estilo.gris))
+        col.addView(cabecera(getString(R.string.x39w_emp_titulo)))
+        col.addView(Estilo.texto(this, getString(R.string.x39w_emp_texto), 12f, Estilo.gris))
         val fila = Estilo.fila(this)
-        fila.addView(Estilo.boton(this, "Importar fichero", principal = false) {
+        fila.addView(Estilo.boton(this, getString(R.string.x39w_emp_importar), principal = false) {
             elegirFichero.launch(arrayOf("application/json", "text/plain", "application/octet-stream", "text/*"))
-        }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = Estilo.dp(this@EmparejarActivity, 5) } })
-        fila.addView(Estilo.boton(this, "Escanear QR") {
+        }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = Estilo.dp(this@EmparejarActivity, 5) } })
+        fila.addView(Estilo.boton(this, getString(R.string.x39w_emp_escanear)) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
                 escanear.launch(Intent(this, EscanearQrActivity::class.java))
             } else {
                 permisoCamara.launch(Manifest.permission.CAMERA)
             }
-        }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { leftMargin = Estilo.dp(this@EmparejarActivity, 5) } })
+        }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = Estilo.dp(this@EmparejarActivity, 5) } })
         col.addView(fila)
         zona = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         col.addView(zona)
@@ -117,45 +118,46 @@ class EmparejarActivity : BaseActivity() {
         zona.removeAllViews()
     }
 
+    /** `motivo` es el mensaje interno (castellano) de `Emparejamiento`; se traduce al pintar. */
     private fun pintarRechazo(motivo: String) {
         zona.removeAllViews()
         val t = Estilo.tarjeta(this).apply { contentDescription = "rechazo" }
-        t.addView(Estilo.texto(this, "PAQUETE RECHAZADO", 12f, Estilo.peligro))
-        t.addView(Estilo.texto(this, motivo, 14f))
-        t.addView(Estilo.texto(this, "No se ha guardado nada.", 12f, Estilo.tenue))
+        t.addView(Estilo.texto(this, getString(R.string.x39w_emp_rechazado), 12f, Estilo.peligro))
+        t.addView(Estilo.texto(this, textoPantalla(motivo), 14f))
+        t.addView(Estilo.texto(this, getString(R.string.x39w_emp_nada_guardado), 12f, Estilo.tenue))
         zona.addView(t)
     }
 
-    private fun fila(etiqueta: String, valor: String): TextView = Estilo.texto(this, "$etiqueta: $valor", 13f)
+    private fun fila(etiqueta: String, valor: String): TextView = Estilo.texto(this, getString(R.string.x39w_emp_fila, etiqueta, valor), 13f)
 
     private fun pintarVistaPrevia(p: PaqueteEmparejamiento) {
         val t = Estilo.tarjeta(this).apply { contentDescription = "vista_previa" }
-        t.addView(Estilo.texto(this, "LO QUE TRAE EL PAQUETE", 12f, Estilo.gris))
-        t.addView(fila("Nombre", p.nombre))
-        t.addView(fila("Red", p.red.name.lowercase()))
-        t.addView(fila("Servidor Electrum", p.electrum + if (p.electrum.startsWith("tcp://")) "  ⚠ sin cifrar" else ""))
-        val huella = fila("Huella SPKI", p.huellaAbreviada())
+        t.addView(Estilo.texto(this, getString(R.string.x39w_emp_trae), 12f, Estilo.gris))
+        t.addView(fila(getString(R.string.x39w_emp_nombre), p.nombre))
+        t.addView(fila(getString(R.string.x39w_emp_red), p.red.name.lowercase()))
+        t.addView(fila(getString(R.string.x39w_emp_servidor), p.electrum + if (p.electrum.startsWith("tcp://")) "  " + getString(R.string.x39w_emp_sin_cifrar) else ""))
+        val huella = fila(getString(R.string.x39w_emp_huella), textoPantalla(p.huellaAbreviada()))
         t.addView(huella)
         if (p.huellaSpki.isNotEmpty()) {
-            t.addView(Estilo.boton(this, "Ver la huella entera", principal = false) {
-                huella.text = "Huella SPKI: ${p.huellaSpki}"
+            t.addView(Estilo.boton(this, getString(R.string.x39w_emp_ver_huella), principal = false) {
+                huella.text = getString(R.string.x39w_emp_fila, getString(R.string.x39w_emp_huella), p.huellaSpki)
             })
         }
-        t.addView(fila("Emitido", Emparejamiento.formatearUtc(p.emitidoS)))
-        t.addView(fila("Caduca", Emparejamiento.formatearUtc(p.caducaS)))
+        t.addView(fila(getString(R.string.x39w_emp_emitido), Emparejamiento.formatearUtc(p.emitidoS)))
+        t.addView(fila(getString(R.string.x39w_emp_caduca), Emparejamiento.formatearUtc(p.caducaS)))
         val tun = p.tunel
         if (tun == null) {
-            t.addView(fila("Túnel", "no trae"))
+            t.addView(fila(getString(R.string.x39w_emp_tunel), getString(R.string.x39w_emp_no_trae)))
         } else {
-            t.addView(fila("Túnel: punto de acceso", tun.endpoint))
-            t.addView(fila("Túnel: clave pública del nodo", "${tun.clavePublicaNodo.take(6)}…${tun.clavePublicaNodo.takeLast(6)}"))
-            t.addView(fila("Túnel: redes permitidas", tun.ipsPermitidas.joinToString(", ")))
-            tun.direccionMovil?.let { t.addView(fila("Túnel: dirección del móvil", it)) }
-            t.addView(Estilo.texto(this, "El túnel propio aún no está disponible en esta versión: los datos se guardan para cuando lo esté. Mientras, el nodo debe ser alcanzable directamente o por la VPN del aparato (modo «externo» en Ajustes).", 12f, Estilo.aviso))
+            t.addView(fila(getString(R.string.x39w_emp_tunel_endpoint), tun.endpoint))
+            t.addView(fila(getString(R.string.x39w_emp_tunel_clave), "${tun.clavePublicaNodo.take(6)}…${tun.clavePublicaNodo.takeLast(6)}"))
+            t.addView(fila(getString(R.string.x39w_emp_tunel_redes), tun.ipsPermitidas.joinToString(", ")))
+            tun.direccionMovil?.let { t.addView(fila(getString(R.string.x39w_emp_tunel_movil), it)) }
+            t.addView(Estilo.texto(this, getString(R.string.x39w_emp_tunel_aviso), 12f, Estilo.aviso))
         }
         val estado = Estilo.texto(this, "", 13f, Estilo.aviso).apply { contentDescription = "estado_emparejamiento" }
         t.addView(estado)
-        val confirmar = Estilo.boton(this, "Confirmar: probar el nodo y guardar solo si está sano") {}
+        val confirmar = Estilo.boton(this, getString(R.string.x39w_emp_confirmar)) {}
         confirmar.contentDescription = "confirmar_emparejamiento"
         confirmar.setOnClickListener {
             val texto = textoActual ?: return@setOnClickListener
@@ -166,29 +168,29 @@ class EmparejarActivity : BaseActivity() {
                 descartar(); pintarRechazo(e.message ?: "paquete inválido"); return@setOnClickListener
             }
             confirmar.isEnabled = false
-            estado.text = "comprobando el nodo…"
+            estado.text = getString(R.string.x39w_emp_comprobando)
             trabajo?.cancel()
             trabajo = lifecycleScope.launch {
                 try {
                     // Configuración y metadatos del paquete se guardan JUNTOS dentro de NodeBridge, o nada.
                     val e = repo.nodo.adoptarSiSano(vigente.aConfig(), vigente)
                     if (e is EstadoNodo.Sano) {
-                        aviso("Nodo emparejado y sano: ${vigente.nombre}")
+                        aviso(getString(R.string.x39w_emp_sano, vigente.nombre))
                         finish()
                     } else {
-                        estado.text = "No se ha guardado nada: ${e.describir()}"
+                        estado.text = getString(R.string.x39w_emp_no_guardado_motivo, textoPantalla(e.describir()))
                         confirmar.isEnabled = true
                     }
                 } catch (_: CancellationException) {
                     // Descartado o pantalla cerrada mientras se comprobaba: NodeBridge no guardó nada.
                 } catch (e: Exception) {
-                    estado.text = "No se ha guardado nada: ${e.message ?: e.javaClass.simpleName}"
+                    estado.text = getString(R.string.x39w_emp_no_guardado_motivo, e.message?.let { textoPantalla(it) } ?: e.javaClass.simpleName)
                     confirmar.isEnabled = true
                 }
             }
         }
         t.addView(confirmar)
-        t.addView(Estilo.boton(this, "Descartar", principal = false) { descartar() }.apply { contentDescription = "descartar_emparejamiento" })
+        t.addView(Estilo.boton(this, getString(R.string.x39w_descartar), principal = false) { descartar() }.apply { contentDescription = "descartar_emparejamiento" })
         zona.addView(t)
     }
 }

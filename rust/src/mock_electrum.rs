@@ -83,6 +83,9 @@ pub struct Estado {
     /// Servidor que exige que `server.version` sea el PRIMER mensaje de la sesión (como manda
     /// la especificación): cualquier otro RPC anterior a la negociación es un error.
     pub negociacion_primero: bool,
+    /// `server.features` responde con un error JSON-RPC (servidor que negocia la versión pero no
+    /// anuncia su génesis): la puerta del génesis no puede pasarse y la conexión se rechaza.
+    pub features_falla: bool,
 }
 
 pub struct Simulado {
@@ -121,6 +124,7 @@ impl Simulado {
             protocolo_negociado: None,
             negociar_segun_cliente: false,
             negociacion_primero: false,
+            features_falla: false,
         }))
     }
 
@@ -371,6 +375,11 @@ impl Simulado {
     }
 
     /// Exigir que `server.version` sea el primer mensaje de cada conexión.
+    /// `server.features` falla con un error JSON-RPC (sin `genesis_hash`).
+    pub fn fijar_features_falla(&self, si: bool) {
+        self.estado.lock().unwrap().features_falla = si;
+    }
+
     pub fn fijar_negociacion_primero(&self, si: bool) {
         self.estado.lock().unwrap().negociacion_primero = si;
     }
@@ -502,14 +511,22 @@ fn responder(
             json!(["simulado 0.1", negociado])
         }
         "server.ping" => Value::Null,
-        "server.features" => json!({
-            "genesis_hash": e.cabeceras[0].block_hash().to_string(),
-            "hash_function": "sha256",
-            "server_version": "simulado 0.1",
-            "protocol_min": protocolo,
-            "protocol_max": protocolo,
-            "pruning": null,
-        }),
+        "server.features" => {
+            if e.features_falla {
+                return Err((
+                    -32000,
+                    "server.features: fallo interno del servidor (simulado)".to_string(),
+                ));
+            }
+            json!({
+                "genesis_hash": e.cabeceras[0].block_hash().to_string(),
+                "hash_function": "sha256",
+                "server_version": "simulado 0.1",
+                "protocol_min": protocolo,
+                "protocol_max": protocolo,
+                "pruning": null,
+            })
+        }
         "blockchain.headers.subscribe" => {
             let tope = match &e.alturas_por_respuesta {
                 Some(seq) if !seq.is_empty() => {

@@ -18,6 +18,7 @@ import com.google.zxing.ReaderException
 import com.google.zxing.common.HybridBinarizer
 import com.google.zxing.qrcode.QRCodeReader
 import java.util.concurrent.Executors
+import x39.wallet.R
 
 /**
  * Lee UN código QR con la cámara trasera (CameraX + zxing) y devuelve su texto a quien la
@@ -38,8 +39,8 @@ class EscanearQrActivity : BaseActivity() {
         super.onCreate(savedInstanceState)
         window.protegerContraCapturas()
         val col = Estilo.columna(this)
-        col.addView(cabecera("Escanear el QR del paquete"))
-        col.addView(Estilo.texto(this, "Apunta al QR generado en tu nodo. Lo leído se valida en la pantalla anterior; no se guarda nada hasta que lo confirmes.", 12f, Estilo.gris))
+        col.addView(cabecera(getString(R.string.x39w_qr_titulo)))
+        col.addView(Estilo.texto(this, getString(R.string.x39w_qr_texto), 12f, Estilo.gris))
         val vista = PreviewView(this).apply {
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, Estilo.dp(this@EscanearQrActivity, 360))
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
@@ -62,7 +63,7 @@ class EscanearQrActivity : BaseActivity() {
                 proveedor.unbindAll()
                 proveedor.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, previa, analisis)
             } catch (e: Exception) {
-                aviso("No se pudo abrir la cámara: ${e.message ?: e.javaClass.simpleName}")
+                aviso(getString(R.string.x39w_qr_sin_camara, e.message ?: e.javaClass.simpleName))
                 finish()
             }
         }, ContextCompat.getMainExecutor(this))

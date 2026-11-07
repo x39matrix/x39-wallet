@@ -117,7 +117,8 @@ paquete de pruebas (`x39.wallet.test`) y un alias de clave propio que borran al 
   los caminos (fallo al preparar, prompt cancelado, fallo al guardar, fin, cancelación);
   `CrearRestaurarActivity` pone a cero palabras, semilla y campo en `onStop` siempre.
 - Pendiente: textos solo en español (la app tiene en, ar, ja y zh); se moverán a recursos al
-  montar en la fase F.
+  montar en la fase F. Los textos de la pantalla Seguridad (fila «Nodo») viven en la app, en los
+  cinco idiomas.
 
 ## Requisito de Android
 
@@ -125,10 +126,71 @@ El módulo declara minSdk 21 (como la app), pero la semilla cifrada con autentic
 operación exige las API del Keystore de Android 6 (API 23): en un aparato anterior la
 billetera se niega a arrancar con un mensaje claro (`Redes.exigirAndroid()`).
 
+## Selector de nodo (Ajustes → Nodo)
+
+`NodoX39.kt`, `Ajustes.kt`, `AjustesActivity.kt`. Dos modos, persistidos en `modo_nodo`:
+
+- **Nodo X-39** (predeterminado en una instalación limpia): `NodoX39.config(red)` = el servidor
+  Electrum de X-39 por red (`tcp://` + puerto Electrum, DENTRO del túnel; mainnet y signet; no hay
+  para regtest), con `ModoTunel.X39`. ANTES de abrir ningún socket, NodeBridge consulta la
+  detección real del túnel (`DetectorTunel`; la real es `WalletRepository.diagnosticoTunel`:
+  redes del sistema con transporte VPN cuyas rutas cubran 10.39.0.3 —`NodoX39.rutaCubreNodo`,
+  por bits: vale 10.39.0.0/24 o 0.0.0.0/0— o con dirección en 10.39.0.0/24; la pista
+  `NodoX39.tunelActivo` de la app solo se anota). Sin túnel con certeza: «Túnel apagado. Activa el
+  X39 Túnel; la billetera no se conecta por otra vía.» de inmediato, sin «conectando…», cero
+  sockets y cero llamadas al motor. Con ruta o sin poder saberlo: se conecta a esa dirección (y a
+  ninguna otra) y, si falla, se vuelve a diagnosticar y la pantalla muestra SOLO uno de los tres
+  textos fijos (`NodoX39.mensajeFallo`); el motivo técnico va al registro `x39.nodo`, sin
+  direcciones (`sinDirecciones`). Ninguna excepción cruda llega a pantalla; la cancelación de la
+  corrutina se relanza y no se enseña (orden 7, 04/11/2026). Historia: la orden 1 decidía con
+  `NodoX39.tunelActivo` (estado en memoria del túnel de la app) y daba falso con el túnel
+  levantado; la orden 6 quitó la puerta y diagnosticaba después; la orden 7 vuelve a poner la
+  puerta, pero con la detección real y sin bloquear por una duda. La app no lleva ninguna otra
+  dirección ni puerto de ese nodo (ni RPC, ni pool, ni SSH). «Usar el nodo X-39» guarda con
+  `configurar` (es el predeterminado, se reintenta cuando el túnel vuelva).
+  Orden 8 (04/11/2026): la vigilancia escucha una señal de red inyectable (`SenalRed`; la real,
+  `WalletRepository.senalRedVpn`, un `NetworkCallback` de transporte VPN) y comprueba enseguida
+  cuando el túnel aparece o desaparece (rebote 500 ms, espera creciente reiniciada; se retira en
+  `vigilar(false)`); con el nodo no disponible, la pantalla principal muestra el motivo UNA vez,
+  en la línea de estado del nodo (`NodoNoDisponible`, `WalletRepository.loMuestraElNodo`), sin
+  repetirlo en «último error» ni en toast; en Ajustes → Nodo, el modo que no está en uso dice
+  «Sin probar todavía. En uso: …», no «sin configurar».
+  Orden 9a (04/11/2026), I1: todos los textos de pantalla del módulo son recursos (`res/values/strings.xml`
+  en castellano, base; `values-en`, `values-zh-rCN`, `values-ja`, `values-ar`; prefijo `x39w_`). Los
+  mensajes de la LÓGICA (`NodeBridge`, `WalletRepository`, `Emparejamiento`, `JsonEstricto`,
+  `NodoX39`…) siguen en castellano como claves internas estables (las comprueban las pruebas JVM y
+  los lee el propietario en los registros); `Textos.kt` los traduce SOLO al pintar
+  (`Context.textoPantalla`, tabla de patrones → recurso `x39w_m_*`, con anidamiento para los
+  compuestos). El idioma lo hereda el módulo del selector de la app sin acoplarse: la app usa
+  `AppCompatDelegate.setApplicationLocales` (de proceso) y todas las pantallas del módulo son
+  `AppCompatActivity`. `TextosTest` comprueba paridad de claves y huecos en las cinco carpetas, que
+  cada entrada de la tabla tiene recurso y que en castellano la ida y vuelta es exacta. De derecha a
+  izquierda (árabe): `supportsRtl` de la app, flecha de volver invertida y márgenes relativos.
+- **Mi nodo**: el servidor del usuario (`tcp://`, `ssl://` o `.onion`), «Probar conexión»
+  (versión del servidor, red, altura, protocolo y latencia) y «Usar este nodo», que pasa por
+  `adoptarSiSano`: solo se guarda si el nodo responde sano y su génesis es el de la red de la
+  billetera; si no, no se toca nada. `ssl://` sin huella se valida contra las autoridades
+  públicas; con la casilla «certificado propio» la app lee la huella del servidor
+  (`Repositorio.huellaServidor` → motor `huella_servidor`, solo el apretón TLS), la muestra con
+  aviso y la fija. `.onion` exige el proxy SOCKS5 (casilla; por defecto `127.0.0.1:9050`; solo
+  IP literal, nunca un nombre, para que el aparato no resuelva nada por DNS), que
+  viaja en `ConfigNodo.proxySocks5` → `ConexionMotor.proxy` → `fijarProxySocks5` del motor en
+  TODAS las operaciones. La dirección se guarda en las preferencias (sobrevive al reinicio y a
+  volver al nodo X-39) y no pasa por ningún `Log`.
+- Migración: sin `modo_nodo` guardado, X-39 si no había servidor propio o si el guardado era el
+  de X-39; «Mi nodo» en otro caso (`NodoX39.resolverModo`, probada en JVM). `borrarConfigNodo()`
+  (= `olvidar()`) deja «Mi nodo» vacío, es decir, SIN nodo.
+- Cambiar de servidor no borra nada: la cadena es la misma; la billetera sincroniza al volver y,
+  si tenía un escaneo completo pendiente, lo hace y lo dice.
+- Errores en lenguaje llano (`mensajeLlano`): sin «(os error N)», con la explicación delante y el
+  texto original entre paréntesis.
+- Seguridad (en la app que incluye el módulo): «Nodo: X-39 por túnel» / «Nodo: el tuyo (host)» y
+  la frase fija `NodoX39.FRASE_PRIVACIDAD`.
+
 ## NodeBridge (fase E-1)
 
-`NodeBridge.kt`: `ConfigNodo` (red, `ssl://`/`tcp://host:puerto`, huella SPKI obligatoria con
-`ssl://` salvo el servidor público de signet, modo de túnel, nombre), `EstadoNodo`
+`NodeBridge.kt`: `ConfigNodo` (red, `ssl://`/`tcp://host:puerto`, huella SPKI opcional con
+`ssl://` [sin ella, raíces públicas], modo de túnel, nombre, proxy SOCKS5 opcional), `EstadoNodo`
 (`SinConfigurar`, `Conectando`, `Sano`, `Caido`, `RedIncorrecta`, `HuellaIncorrecta`) y
 `NodeBridgeImpl`: comprobaciones en orden por el motor (`comprobarNodo`: huella SPKI DENTRO
 del apretón de manos TLS, génesis, protocolo 1.4 y latencia, altura no inferior a la última

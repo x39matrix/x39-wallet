@@ -1,5 +1,3 @@
-import java.util.Properties
-
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
@@ -25,18 +23,9 @@ android {
         val marcadorEsperado = if (esMainnet) "x39wallet-redes=mainnet" else "x39wallet-redes=solo-prueba"
         buildConfigField("String", "REDES_PERMITIDAS", "\"$redesPermitidas\"")
         buildConfigField("String", "MARCADOR_REDES_ESPERADO", "\"$marcadorEsperado\"")
-        // Token de la API de la Pi 5 (TelemetriaPi5, :8000). Nunca en el repo: se lee de
-        // -Px39.pi5.token, de X39_PI5_TOKEN o de android/local.properties (ignorado por git).
-        // Sin token el módulo compila igual y la pantalla avisa de que falta.
-        val propiedadesLocales = Properties().apply {
-            val f = rootProject.file("local.properties")
-            if (f.isFile) f.inputStream().use { load(it) }
-        }
-        val tokenPi5 = (providers.gradleProperty("x39.pi5.token").orNull
-            ?: System.getenv("X39_PI5_TOKEN")
-            ?: propiedadesLocales.getProperty("x39.pi5.token")
-            ?: "").trim().replace("\\", "\\\\").replace("\"", "\\\"")
-        buildConfigField("String", "PI5_TOKEN", "\"$tokenPi5\"")
+        // El módulo no lleva ninguna otra dirección ni puerto de red: solo el servidor Electrum
+        // (NodoX39, o el que escriba el usuario). La telemetría de laboratorio vive en la app
+        // que lo incluye, en un sabor que no se compila como «general».
     }
 
     buildFeatures { buildConfig = true }

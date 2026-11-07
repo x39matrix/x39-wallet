@@ -6,13 +6,20 @@ import x39.wallet.Red
 
 /**
  * Ajustes de la billetera, separados por edición y excluidos de las copias de seguridad.
- * El servidor Electrum lo elige el usuario; vacío por defecto: sin servidor no
- * hay red. Nada del mnemónico pasa por aquí.
+ * Dos modos de nodo (Ajustes → Nodo): «Nodo X-39» (predeterminado: el servidor Electrum de
+ * X-39 por el túnel de la app, sin escribir nada) y «Mi nodo» (el servidor Electrum que escribe
+ * el usuario, que se conserva aunque vuelva al nodo X-39). Nada del mnemónico pasa por aquí.
+ * La dirección del nodo propio no se escribe en ningún registro (`Log`): solo en estas
+ * preferencias y en pantalla.
  */
 class Ajustes(context: Context, nombrePrefs: String = PerfilBilletera.actual.preferencias) : AlmacenConfigNodo {
 
-    override fun leer(): ConfigNodo? = configNodo()
-    private val CLAVES_NODO = listOf(CLAVE_SERVIDOR, CLAVE_HUELLA, CLAVE_TUNEL, CLAVE_NOMBRE_NODO, CLAVE_TUNEL_CLAVE_NODO, CLAVE_TUNEL_ENDPOINT, CLAVE_TUNEL_IPS, CLAVE_TUNEL_MOVIL)
+    /** Configuración activa según el modo: el nodo X-39 de la red, o «Mi nodo» (null si está vacío). */
+    override fun leer(): ConfigNodo? = when (modoNodo) {
+        ModoNodo.X39 -> NodoX39.config(red)
+        ModoNodo.PROPIO -> configNodo()
+    }
+    private val CLAVES_NODO = listOf(CLAVE_MODO, CLAVE_SERVIDOR, CLAVE_HUELLA, CLAVE_TUNEL, CLAVE_NOMBRE_NODO, CLAVE_PROXY, CLAVE_PROXY_DIRECCION, CLAVE_TUNEL_CLAVE_NODO, CLAVE_TUNEL_ENDPOINT, CLAVE_TUNEL_IPS, CLAVE_TUNEL_MOVIL)
 
     /**
      * Configuración y metadatos del paquete en UNA escritura: `commit()` a propósito (síncrono),
@@ -28,11 +35,20 @@ class Ajustes(context: Context, nombrePrefs: String = PerfilBilletera.actual.pre
         val anteriores = CLAVES_NODO.associateWith { prefs.getString(it, null) }
         val emparejadoAntes = if (prefs.contains(CLAVE_EMPAREJADO_EN)) prefs.getLong(CLAVE_EMPAREJADO_EN, 0L) else null
         val e = prefs.edit()
-            .putString(CLAVE_SERVIDOR, c.electrum.trim())
-            .putString(CLAVE_HUELLA, (c.huellaServidor ?: "").trim().lowercase().filter { it.isLetterOrDigit() })
-            .putString(CLAVE_TUNEL, c.tunel.name)
-            .putString(CLAVE_NOMBRE_NODO, c.nombre.trim())
-        if (paquete != null) {
+        if (c.tunel == ModoTunel.X39) {
+            // Nodo X-39: solo cambia el modo. «Mi nodo» y su emparejamiento se conservan tal cual,
+            // para volver a ellos sin escribir nada (y un paquete no tiene sentido aquí).
+            e.putString(CLAVE_MODO, ModoNodo.X39.name)
+        } else {
+            e.putString(CLAVE_MODO, ModoNodo.PROPIO.name)
+                .putString(CLAVE_SERVIDOR, c.electrum.trim())
+                .putString(CLAVE_HUELLA, (c.huellaServidor ?: "").trim().lowercase().filter { it.isLetterOrDigit() })
+                .putString(CLAVE_TUNEL, c.tunel.name)
+                .putString(CLAVE_NOMBRE_NODO, c.nombre.trim())
+                .putString(CLAVE_PROXY, (c.proxySocks5 ?: "").trim())
+            if (!c.proxySocks5.isNullOrBlank()) e.putString(CLAVE_PROXY_DIRECCION, c.proxySocks5.trim())
+        }
+        if (paquete != null && c.tunel != ModoTunel.X39) {
             val tn = paquete.tunel
             e.putString(CLAVE_TUNEL_CLAVE_NODO, tn?.clavePublicaNodo ?: "")
                 .putString(CLAVE_TUNEL_ENDPOINT, tn?.endpoint ?: "")
@@ -78,6 +94,24 @@ class Ajustes(context: Context, nombrePrefs: String = PerfilBilletera.actual.pre
         if (s.isEmpty()) return ""
         return if ("://" in s) s else "ssl://$s"
     }
+
+    /**
+     * Modo del selector de nodo. Sin valor guardado (instalación nueva o anterior a este ajuste)
+     * lo decide [NodoX39.resolverModo]: X-39 si no había servidor propio o si el guardado era el
+     * de X-39; «Mi nodo» en otro caso; y siempre «Mi nodo» en una red sin nodo X-39.
+     */
+    var modoNodo: ModoNodo
+        get() = NodoX39.resolverModo(prefs.getString(CLAVE_MODO, null), servidor, red)
+        set(v) = prefs.edit().putString(CLAVE_MODO, v.name).apply()
+
+    /** Proxy SOCKS5 `host:puerto` en uso para «Mi nodo»; vacío = sin proxy. */
+    var proxySocks5: String
+        get() = prefs.getString(CLAVE_PROXY, "") ?: ""
+        set(v) = prefs.edit().putString(CLAVE_PROXY, v.trim()).apply()
+
+    /** Última dirección de proxy escrita, para rellenar el campo (por defecto, Orbot). */
+    val proxyDireccion: String
+        get() = (prefs.getString(CLAVE_PROXY_DIRECCION, null) ?: "").ifBlank { NodoX39.PROXY_POR_DEFECTO }
 
     /** Huella SPKI (SHA-256, hex) del certificado del nodo; vacía si no se fijó. */
     var huellaServidor: String
@@ -126,6 +160,9 @@ class Ajustes(context: Context, nombrePrefs: String = PerfilBilletera.actual.pre
     }
 
     companion object {
+        private const val CLAVE_MODO = "modo_nodo"
+        private const val CLAVE_PROXY = "proxy_socks5"
+        private const val CLAVE_PROXY_DIRECCION = "proxy_socks5_direccion"
         private const val CLAVE_SERVIDOR = "servidor_electrum"
         private const val CLAVE_RED = "red"
         private const val CLAVE_HUELLA = "huella_servidor"
@@ -139,8 +176,9 @@ class Ajustes(context: Context, nombrePrefs: String = PerfilBilletera.actual.pre
     }
 }
 
-// ---- NodeBridge: configuración del nodo del usuario (persistida en las mismas preferencias) ----
+// ---- NodeBridge: «Mi nodo», el nodo del usuario (persistido en las mismas preferencias) ----
 
+/** La configuración de «Mi nodo» tal como está guardada, esté o no en uso; `null` si está vacía. */
 fun Ajustes.configNodo(): ConfigNodo? {
     val electrum = urlServidor()
     if (electrum.isEmpty()) return null
@@ -150,6 +188,7 @@ fun Ajustes.configNodo(): ConfigNodo? {
         huellaServidor = huellaServidor.ifBlank { null },
         tunel = tunel,
         nombre = nombreNodo,
+        proxySocks5 = proxySocks5.ifBlank { null },
     )
 }
 
@@ -158,13 +197,20 @@ fun Ajustes.guardarConfigNodo(c: ConfigNodo) {
     huellaServidor = c.huellaServidor ?: ""
     tunel = c.tunel
     nombreNodo = c.nombre
+    proxySocks5 = c.proxySocks5 ?: ""
 }
 
-/** Olvidar el nodo borra también lo que vino en el paquete de emparejamiento (revocación local, §5.3). */
+/**
+ * Olvidar el nodo propio: borra «Mi nodo» y lo que vino en el paquete de emparejamiento
+ * (revocación local, §5.3) y deja el modo en «Mi nodo» vacío, es decir, SIN nodo (la pantalla
+ * principal y Ajustes → Nodo lo dicen; el usuario elige después el nodo X-39 o escribe el suyo).
+ */
 fun Ajustes.borrarConfigNodo() {
+    modoNodo = ModoNodo.PROPIO
     servidor = ""
     huellaServidor = ""
     tunel = ModoTunel.NINGUNO
     nombreNodo = ""
+    proxySocks5 = ""
     borrarEmparejamiento()
 }

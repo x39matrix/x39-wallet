@@ -914,6 +914,493 @@ Un criterio verificado sobre otra biblioteca, otras opciones u otro commit no cu
 | Rama «permiso de cámara denegado» | Sin probar (§5.2) |
 | Multifirma | Sin diseño ni plan; fuera de esta versión |
 
+### 7.3 Deuda de PRIORIDAD ALTA (03/11/2026): la billetera mainnet instalada va firmada con la clave de depuración
+
+El `.lab` (`org.x39matrix.llamadas.lab`) que lleva la billetera mainnet en el Redmi, y los dos APK
+de la entrega del selector de nodo (`cierre/apk/`), están firmados con el almacén de depuración de
+Gradle/AGP de la máquina de desarrollo (`~/.android/debug.keystore`, certificado
+`CN=Android Debug, O=Android, C=US`, SHA-256 `30922e27…8187`; detalle en
+`client-sdk-android/entregas/selector-nodo-20261103/cierre/07-firma.txt` y `08-keystore.txt`).
+Esa clave no es una identidad de X-39: la genera AGP con contraseña por defecto y cualquier copia
+del fichero firma actualizaciones válidas del paquete. Vale para el laboratorio; no vale para una
+billetera con fondos a largo plazo.
+
+**Advertencia: NO existe cambio de firma sobre el paquete instalado.** Android exige que toda
+actualización (`adb install -r`) vaya firmada con la misma clave que el paquete que ya está; un APK
+con otra clave se rechaza (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`), y la única forma de pasar a otra
+clave es desinstalar e instalar de nuevo, lo que destruye los datos privados de la app
+(noBackupFilesDir y las claves del Keystore de Android): la billetera del aparato desaparece y solo
+vuelve desde la semilla. Por eso la migración es un plan de tres pasos, no un «re-firmado»:
+
+1. **Semilla respaldada y PROBADA.** Las doce palabras en papel, fuera del móvil, leídas dos veces;
+   y restauradas con éxito en otro aparato (el móvil secundario, edición signet basta para probar el
+   formato BIP39/BIP84; la frase comprobada tiene que ser la del Redmi), borrando después esa
+   restauración del secundario. Es el paso B-0.2 del guion
+   `cierre/04-guion-movil.md`. Sin este PASA no se sigue.
+2. **Instalación NUEVA con keystore propio.** Compilar el sabor con `signingConfig` de un almacén
+   de X-39 (un keystore propio, distinto del de depuración y, si se quiere, distinto del de
+   publicación de Comunicaciones), guardado fuera de la máquina de desarrollo. Como la clave
+   cambia, esto es forzosamente desinstalar el `.lab` actual e instalar el nuevo (o instalarlo con
+   OTRO `applicationId` y convivir hasta comprobar el paso 3: así el `.lab` viejo con sus fondos
+   sigue intacto mientras se prueba). Antes de desinstalar nada: paso 1 en verde, saldo y
+   direcciones anotados, y ningún envío en curso (`Firmada` o `Incierta`) en la billetera vieja.
+3. **Restauración desde la semilla** en la instalación nueva: mismas doce palabras → mismo
+   `xpub` BIP84 → mismas direcciones y mismo saldo tras sincronizar con el nodo X-39 (comprobar la
+   primera dirección de recibir y el saldo frente a lo anotado). Solo entonces se desinstala el
+   `.lab` viejo (si convivían) y se da la migración por hecha. Los envíos firmados o inciertos de la
+   instalación vieja no vuelven con la semilla (§4, B2): por eso el paso 2 exige que no haya ninguno.
+
+Hasta completar los tres pasos: copia del almacén de depuración fuera de la máquina (comandos en
+`08-keystore.txt`), porque perderlo deja el `.lab` instalado sin posibilidad de actualización.
+
+## 8. Selector de nodo: «Nodo X-39» o «Mi nodo» (03/11/2026)
+
+Orden: que cada usuario elija con qué nodo sincroniza su billetera. Modo «Nodo X-39»
+(predeterminado: el servidor Electrum de X-39 por el X39 Túnel, sin escribir nada; sin túnel no
+se conecta por otra vía) y modo «Mi nodo» (`tcp://`, `ssl://` o `.onion` con proxy SOCKS5; un
+servidor solo se adopta tras comprobar que responde y que su génesis es el de la red de la
+billetera). Nada de fondos reales: todo contra el simulado, el banco regtest local o en JVM.
+Lo que exige el aparato lo hace el propietario (P1, P5 y P8 en parte, P9).
+
+### 8.1 Qué cambió
+
+- Motor (`rust/src/nodo.rs`, `lib.rs`, `ffi.rs`): proxy SOCKS5 opcional en todas las conexiones
+  (`Conexion::abrir(…, proxy)`, `comprobar_nodo`, `altura_red`, `estimar_comision`,
+  `Billetera::fijar_proxy`); CONNECT con el nombre tal cual (ATYP 3; IP literal como IP), de modo
+  que quien resuelve es el proxy; un destino `.onion` SIN proxy se rechaza antes de abrir ningún
+  socket. `huella_servidor(servidor, proxy)`: solo el apretón TLS, sin hablar Electrum, devuelve
+  la huella SPKI que presenta el servidor, para que la app la muestre y el usuario la fije si
+  activa «certificado propio». Bindings regenerados; biblioteca nueva (§8.3).
+- Android (`NodoX39.kt`, `NodeBridge.kt`, `Ajustes.kt`, `AjustesActivity.kt`,
+  `WalletRepository.kt`, `BilleteraActivity.kt`): `ModoTunel.X39` (exige el X39 Túnel, que
+  anuncia la app por `NodoX39.tunelActivo`), `ConfigNodo.proxySocks5`, modo persistido
+  `modo_nodo` con migración (`NodoX39.resolverModo`), pantalla Ajustes → Nodo con los dos modos,
+  «Probar conexión» (versión, red, altura, protocolo, latencia) y «Usar este nodo»
+  (`adoptarSiSano`: si falla, nada cambia), casillas «certificado propio» y «proxy SOCKS5»,
+  errores en lenguaje llano (`mensajeLlano`). Regla cambiada: `ssl://` sin huella ya no se
+  rechaza en Kotlin (el motor valida contra las autoridades públicas); el paquete de
+  emparejamiento sigue exigiendo huella con `ssl://`.
+- App que incluye el módulo (`client-sdk-android`, sabor `general`): proveedor del túnel y fila
+  «Nodo» en Seguridad con la frase fija, en cinco idiomas.
+
+### 8.2 Pruebas automáticas del motor (`rust/`, `cargo test --features mainnet` y sin feature)
+
+| Orden | Resultado (03/11/2026) |
+|---|---|
+| `cargo test --features mainnet` | **95 pasadas, 0 fallos, 5 ignoradas** (antes 88 + 2 de la semilla; nuevas: 5) |
+| `cargo test` (sin mainnet) | 95 pasadas, 0 fallos, 5 ignoradas |
+| `cargo clippy --all-targets` (con y sin `mainnet`) | 0 avisos nuevos; quedan 3 anteriores a este cambio (`large_enum_variant` en `Flujo`, y dos ayudantes de pruebas con 8 argumentos) |
+| `cargo fmt --check` | limpio |
+
+Pruebas nuevas (`rust/src/tests.rs`, con un **proxy SOCKS5 falso** local que apunta el destino
+pedido y reenvía al simulado ignorando el nombre, como haría Tor con un `.onion`):
+
+| Prueba | Qué demuestra |
+|---|---|
+| `nodo_onion_sin_proxy_se_rechaza_antes_de_abrir_socket` | `.onion` sin proxy → `Error::Red` con «proxy SOCKS5» en la sonda, en `altura_red`, en `huella_servidor` y en `Billetera::sincronizar`; inmediato (< 2 s) y el simulado no recibe ninguna conexión; un proxy en blanco cuenta como ninguno |
+| `nodo_por_proxy_socks5_llega_al_servidor_y_el_nombre_lo_resuelve_el_proxy` | sonda, altura y comisión por el proxy; el proxy recibe el nombre `.onion` tal cual (ATYP 3) y una IP literal como IP (ATYP 1); la billetera con `fijar_proxy` sincroniza por el proxy (saldo y movimientos correctos) y TODAS sus conexiones van por él; el génesis sigue mandando a través del proxy |
+| `nodo_por_proxy_socks5_con_tls_la_huella_sigue_mandando` | TLS con huella por el proxy: sano; huella equivocada: `HuellaServidor`; sin huella y autofirmado: rechazado; `huella_servidor` la observa por el proxy |
+| `nodo_proxy_que_rechaza_falta_o_esta_mal_escrito_da_error_claro` | respuesta SOCKS5 0x04 → «servidor inalcanzable» nombrando el destino, y el simulado no recibe nada; nadie escucha en el proxy → error con la dirección del proxy; `127.0.0.1`, `127.0.0.1:abc`, `:9050` → «proxy SOCKS5 … host:puerto»; algo que acepta y cuelga → «sin respuesta al saludo» |
+| `nodo_huella_servidor_observa_el_spki_sin_hablar_electrum` | la huella observada = la del simulado TLS; la conexión que vio el simulado no pidió NINGÚN método Electrum; con `tcp://` no hay certificado; observar no es validar (una huella fijada distinta sigue rechazándose) |
+
+### 8.3 Banco regtest local real (Bitcoin Core 30.2 + electrs 0.11.1, `tcp://127.0.0.1:60401`)
+
+`cargo test --features mainnet -- --ignored banco_regtest --nocapture` (banco levantado con
+`arriba.sh`, altura 108, y parado después con `abajo.sh`):
+
+```
+electrs real: servidor «electrs/0.11.1», protocolo 1.4, altura 108, red regtest, 0 ms, cifrado false
+pedido como signet: el servidor es de otra red: se esperaba signet, el servidor anuncia génesis 0f9188f1…66e2206
+pedido como mainnet: el servidor es de otra red: se esperaba bitcoin, el servidor anuncia génesis 0f9188f1…66e2206
+altura exigida +10: servidor Electrum: el servidor va por detrás: altura 108, ya se había visto 118
+.onion sin proxy: servidor Electrum: un servidor .onion solo se alcanza por un proxy SOCKS5 (Orbot): activa el proxy en los ajustes del nodo
+por proxy SOCKS5 127.0.0.1:38337: altura 108, servidor «electrs/0.11.1»
+test tests::banco_regtest_selector_nodo_sonda_otra_red_y_proxy ... ok
+```
+
+Es la evidencia de **P3** (servidor de otra red → rechazado por génesis, sin tocar nada: la sonda
+no escribe) y de **P7** (versión, altura y red en la sonda; errores en texto llano) contra un
+electrs de verdad, y de que la misma sonda llega al electrs real a través de un proxy SOCKS5.
+
+### 8.4 Biblioteca nativa (mainnet) y bindings
+
+`X39_MAINNET=1 android/build-native.sh --actualizar`: `libx39wallet.so`
+**`244eaa581adbaa822f724c44f5922c627fb96a1488ceca4eaf4580f26bff5a43`**, 9.119.776 bytes, tres
+segmentos `LOAD` a `0x4000`; NDK 30.0.16248370, rustc 1.98.1, cargo-ndk 4.1.2, uniffi 0.32.2;
+bindings con `comprobarNodo(…, proxySocks5)`, `alturaRed(…, proxySocks5)`,
+`estimarComision(…, proxySocks5)`, `huellaServidor(servidor, proxySocks5)` y
+`Billetera.fijarProxySocks5`. El binario certificado en §7 (`581a852c…`) queda sustituido.
+**B5 repetido sobre esta biblioteca en el cierre (03/11/2026, §8.8): `X39_MAINNET=1
+android/build-native.sh --verificar` da `244eaa58…` en compilación limpia en directorio temporal:
+REPRODUCIBLE.**
+
+### 8.5 Módulo Android: pruebas JVM y lint (`./gradlew :wallet:testDebugUnitTest -Px39.mainnet=true`)
+
+| Clase | Pruebas | Fallos |
+|---|---|---|
+| EmparejamientoTest | 17 | 0 |
+| MnemonicoTest | 9 | 0 |
+| NodeBridgeTest | 23 (4 nuevas) | 0 |
+| NodoX39Test (nueva) | 4 | 0 |
+| PerfilBilleteraTest | 3 | 0 |
+| **Total** | **56** | **0** |
+
+Nuevas: `configuracionInvalida` ampliada (`ssl://` sin huella válida; host:puerto; `.onion` exige
+proxy; proxy mal formado), `elNodoX39ExigeElTunelDeLaApp_yNoSeConectaPorOtraVia` (sin el X39
+Túnel: `Caido` con el texto fijo y CERO llamadas al motor aunque haya otra VPN activa; con túnel:
+sano; `probar` no guarda), `conexionSanaLlevaElProxyDeLaMismaConfiguracion`,
+`olvidarDejaLoQueDigaElAlmacen`, `losErroresDeRedSalenEnLenguajeLlano_conservandoElOriginal`;
+`NodoX39Test`: solo el puerto Electrum por red (nada para regtest ni testnet), modo
+predeterminado X-39 en instalación limpia y migración de lo ya guardado, descripción para
+Seguridad, frase fija. `:wallet:lintDebug`: **BUILD SUCCESSFUL** (había 2 errores `NewApi`
+anteriores a este cambio en `TelemetriaPi5.urlPanel`, anotado entonces con `@RequiresApi(M)`;
+ese fichero sale del módulo en el cierre, §8.8).
+
+### 8.6 APK `general` (`.lab`) y P10
+
+`X39_MAINNET=1 ./gradlew :sample-app:assembleGeneralDebug -Px39.mainnet=true` → BUILD
+SUCCESSFUL; `:sample-app:assembleComunicacionesDebug` → BUILD SUCCESSFUL (la costura nueva
+devuelve `null`). En el dex: `REDES_PERMITIDAS="mainnet"`, `MARCADOR_REDES_ESPERADO=
+"x39wallet-redes=mainnet"`. **No instalado en ningún aparato** (lo instala el propietario).
+
+P10 (`entregas/selector-nodo-20261103/05-p10-cadenas-apk.txt` en `client-sdk-android`): en
+los DEX y `resources.arsc` no hay `8332`, `18443`, `stratum`, `rpcuser` ni `rpcpassword`; las
+únicas direcciones del nodo son `tcp://10.39.0.3:50001` y `tcp://10.39.0.3:60601` (el Electrum
+de X-39 por red). Los demás aciertos son de otras bibliotecas: «RPC» (29) es el RPC de LiveKit
+(`RPC_REQUEST`, `RPC_ACK`…); «3333» son números (`333333`, curvas Bézier); las IP sueltas son
+ejemplos de WebRTC/SIP y las del túnel de la propia app (`10.39.0.1/2`, `159.198.37.137:51820`).
+Quedaba en el APK, por decisión del 02/11/2026 y fuera de esa orden, la telemetría de la
+Pi 5 (`TelemetriaPi5.kt`: `:8000`, `:3000`, `192.0.2.46`, «CKPool», `/api/v1/pool/restart`;
+`EdicionExtra.URL_PANEL_PI5`). **En el cierre (§8.8) sale del módulo y del sabor `general`**: P10
+repetido sobre el APK recompilado en
+`entregas/selector-nodo-20261103/cierre/01-p10-strings.txt`.
+
+### 8.7 Pruebas de aceptación: estado
+
+| # | Prueba | Estado |
+|---|---|---|
+| P1 | Instalación limpia → modo X-39 por defecto, sin dirección que escribir | Lógica probada en JVM (`resolverModo(null, "", red) = X39`); en el móvil (03/11/2026, APK `34499ed7…`): el modo X-39 arrancó pero la puerta del túnel daba «activa el X39 Túnel» con el túnel levantado → **corregido en §8.9**; recorrido pendiente con el APK nuevo |
+| P2 | «Mi nodo» con `tcp://` de la misma red → sincroniza y el saldo coincide | Motor: sincronización con el simulado por proxy y en directo, saldo exacto (§8.2); cambio de servidor sin borrar nada (misma cadena, basta sincronizar); **en el móvil: pendiente** |
+| P3 | Servidor de otra red → rechazado, estado intacto | Banco regtest real pedido como signet y mainnet (§8.3); `adoptarSiSano` no guarda si no da Sano (NodeBridgeTest) |
+| P4 | `ssl://` válido OK; certificado no válido rechazado sin la casilla, aceptado con ella y con aviso | Motor: autofirmado sin huella rechazado, con huella observada y fijada aceptado (§8.2); la casilla y el aviso están en `AjustesActivity`; **recorrido en pantalla: pendiente** |
+| P5 | `.onion` sin proxy rechazado con mensaje; con proxy conecta | Motor y Kotlin (sin proxy: ni un socket; con proxy SOCKS5 falso y con electrs real a través del proxy); **con Orbot en el móvil: pendiente (manual)** |
+| P6 | Volver a «Nodo X-39» → sin escribir nada, vuelve a sincronizar | `configurar(NodoX39.config)` conserva «Mi nodo»; `olvidarDejaLoQueDigaElAlmacen`; **en el móvil: pendiente** |
+| P7 | «Probar conexión» → versión, altura y red; errores llanos | §8.3 y `mensajeLlano` (JVM) |
+| P8 | La dirección sobrevive al reinicio y no está en ningún log | Preferencias con `commit()` (como antes); el módulo solo escribe en logcat con la etiqueta `x39.nodo` (desde la orden 6) y siempre pasado por `sinDirecciones` o solo con el nombre de la clase de la excepción (orden 7, `BaseActivity.textoDeFallo`); `adb logcat -d \| grep 10.39.0.3` debe dar 0; **reinicio del móvil: pendiente** |
+| P9 | Seguridad muestra el nodo y la frase fija | Código y cadenas en 5 idiomas; **a ojo en el móvil: pendiente** |
+| P10 | Sin más direcciones ni puertos que el Electrum de X-39 | §8.6 y §8.8: cumplido; la telemetría de la Pi 5 ya no está en el módulo ni en el `.lab` (sabor `escritorio` de la app, que no se entrega) |
+
+Las pruebas instrumentadas (`src/androidTest`) no se han ejecutado (exigen el aparato); se han
+adaptado `FakeRepositorio` (nuevo método `huellaServidor`) y el `@Before` de
+`EmparejarActivityInstrumentadoTest` (sin nodo ANTES de crear el repositorio, porque el modo
+predeterminado arranca ya configurado). Pendiente de correr en el aparato por el propietario.
+
+### 8.8 Cierre (03/11/2026): telemetría fuera, B5, auditoría
+
+Entrega en `client-sdk-android/entregas/selector-nodo-20261103/cierre/` (01 a 05). Sin commit.
+
+- **Telemetría de la Pi 5 fuera del módulo** (`TelemetriaPi5.kt` borrado; el panel y el botón
+  «Minería y Nodo Pi 5» fuera de `BilleteraActivity`; `PI5_TOKEN` fuera de `build.gradle.kts`). El
+  módulo `:wallet` ya no lleva ninguna dirección ni puerto de red salvo el Electrum (`NodoX39` y lo
+  que escriba el usuario). En la app vive solo en un sabor `escritorio` que no se entrega.
+- **B5 sobre `244eaa58…`**: `X39_MAINNET=1 android/build-native.sh --verificar` → misma suma en
+  compilación limpia en directorio temporal (REPRODUCIBLE; `cierre/02-b5.txt`). Esta orden no
+  cambia nada de `rust/src` que entre en la biblioteca (solo `tests.rs` y `mock_electrum.rs`,
+  `#[cfg(test)]`); el candado se regenera al final solo por la lista de ficheros Kotlin.
+- **Auditoría** (`cierre/03-auditoria.md`): (1) sin resolución DNS local con proxy: el nombre del
+  destino va al proxy tal cual (ATYP 3) y el único `to_socket_addrs` del motor es el del propio
+  proxy; por eso Kotlin exige ahora el proxy como **IP literal** (`ConfigNodo.proxyBienFormado`,
+  `esIpv4Literal`, `esIpv6Literal`; un nombre habría que resolverlo en el aparato). (2)
+  `adoptarSiSano` no escribe nada antes de `Sano`; un servidor que negocia `server.version` pero
+  falla en `server.features` se rechaza sin tocar disco ni memoria. (3) Aviso de «certificado
+  propio» reescrito en lenguaje llano (`AjustesActivity.AVISO_CERTIFICADO_PROPIO`): confía SOLO en
+  esa huella y en ninguna autoridad; sin la casilla, en las autoridades públicas reconocidas (las
+  raíces de Mozilla que lleva el motor, no el almacén del sistema: anotado como discrepancia con
+  la orden, sin corregir a ciegas).
+- Pruebas nuevas: Rust `nodo_por_proxy_el_nombre_de_mi_nodo_no_se_resuelve_en_este_proceso` y
+  `puerta_genesis_servidor_que_negocia_pero_falla_en_features_se_rechaza_sin_tocar_nada`
+  (simulado con `fijar_features_falla`); JVM `configuracionInvalida` ampliada (proxy solo IP) y
+  `adoptarSiSano_servidorQueRespondeVersionPeroFallaEnFeatures_noEscribeNada` (cuenta los intentos
+  de escritura del almacén). Suites: `cargo test` con y sin `mainnet` 97 pasadas, 0 fallos, 6
+  ignoradas; clippy sin avisos nuevos; fmt limpio; JVM 57, 0 fallos; lint en verde
+  (`cierre/05-pruebas.txt`).
+- Guion manual para el propietario (P1, P2, P4, P5, P6, P8, P9; primero móvil secundario en
+  signet, después el principal en mainnet): `cierre/04-guion-movil.md`, con los dos APK y sus
+  sumas en `cierre/apk/`. Nada instalado.
+- **Deuda del motor (anotada 03/11/2026, orden 3).** Un proxy SOCKS5 escrito como NOMBRE
+  (`localhost:9050`, `orbot.local:9050`) debe rechazarse TAMBIÉN en Rust, en `analizar_proxy`
+  (`rust/src/nodo.rs`, hoy acepta cualquier `host:puerto` y `conectar_tcp` lo resolvería con
+  `to_socket_addrs`, es decir, una consulta DNS desde el aparato antes de que nada pase por el
+  proxy). Hoy lo impide solo la capa Kotlin: `ConfigNodo.proxyBienFormado` / `esIpv4Literal` /
+  `esIpv6Literal` (`NodeBridge.kt`), aplicada en `invalida()` antes de llamar al motor, cubierta
+  por la prueba JVM `NodeBridgeTest.configuracionInvalida` (bloque «El proxy es una IP literal,
+  nunca un nombre»: `localhost:9050`, `orbot.local:9050`, `proxy.ejemplo.onion:9050`,
+  `[localhost]:9050`… rechazados; `10.0.0.1:9050`, `[fe80::1]:9050`, `[::ffff:127.0.0.1]:9050`…
+  aceptados). Queda para la **próxima biblioteca** (cambia la `.so`, así que exige repetir B5 y
+  regenerar bindings y candado): `analizar_proxy` debe exigir `IpAddr` literal con un error claro
+  («el proxy SOCKS5 debe ser IP:puerto, no un nombre») y una prueba Rust que lo demuestre sin abrir
+  socket. No se ha hecho en el cierre para no tocar la biblioteca certificada `244eaa58…`.
+
+### 8.9 Orden 6 (03/11/2026): la puerta del modo X-39 no detectaba el túnel en el Redmi
+
+Evidencia del propietario: APK `34499ed7…` instalado sobre el `.lab`, túnel WireGuard
+levantado (x39tunel, 10.39.0.2/32, apretón reciente), y la app decía «nodo caído: activa el X39
+Túnel» con reintento cada 8 s; `tcpdump -ni wg0 host 10.39.0.2` en el VPS no veía ni un paquete.
+
+**Causa** (`NodeBridge.kt`, `comprobarUnaVez`, orden 1): `if (c.tunel == X39 && !hayTunelX39())
+return Caido(MENSAJE_TUNEL)` ANTES de llamar al motor, y `hayTunelX39` era `NodoX39.tunelActivo`,
+que la app pone como `{ TunelX39.arriba() }` = `fase == PROTEGIDO || PROTEGIDO_SIN_PSK`: el estado
+EN MEMORIA del objeto del túnel, no la interfaz. Esa fase es falsa con el túnel levantado en al
+menos tres casos: (a) `ESPERANDO_ALTA`/`ESPERANDO_PSK`/`LEVANTANDO` cada vez que se reabre el socket
+de señalización (el propio `TunelX39.kt` lo documenta: «la fase pasa por ESPERANDO_ALTA cada vez
+que se reabre el socket de señalización»), que con HyperOS cortando sockets en segundo plano pasa
+en cada vuelta al primer plano; (b) `FALLO` tras un `Tunnel.State.DOWN` transitorio; (c) proceso
+reiniciado con la VPN del sistema aún arriba: `asegurar()` solo pone PROTEGIDO si
+`GoBackend.getState(tunel) == UP`, y un `GoBackend` nuevo no conoce el túnel que levantó el proceso
+anterior. El repliegue `hayVpnActiva` (solo `activeNetwork` con `TRANSPORT_VPN`) tampoco servía con
+rutas parciales (`10.39.0.0/24`): la red por defecto sigue siendo el wifi. Como la puerta cortaba
+antes del socket, el VPS no veía nada. La versión del 31/10 sincronizaba porque su configuración
+era `ModoTunel.NINGUNO` (sin puerta).
+
+**Arreglo**: la puerta no decide. En modo X-39 se intenta SIEMPRE la conexión a
+`NodoX39.servidor(red)` (y a ninguna otra dirección: `c.electrum` es la de `NodoX39.config`); si
+falla, `diagnosticoTunel()` (`WalletRepository.diagnosticoTunel`: recorre `allNetworks`, cuenta las
+de `TRANSPORT_VPN` y las que tienen ruta (`routes[].destination.contains(10.39.0.3)`) o dirección en
+`10.39.0.0/24`; sin DNS ni sockets; la pista de la app solo va al detalle) elige el mensaje:
+`EstadoTunel.SIN_TUNEL` → `NodoX39.MENSAJE_TUNEL` («Túnel apagado. Activa el X39 Túnel; la billetera
+no se conecta por otra vía.», corto y sin cola técnica: el motivo solo va al registro; G5),
+`CON_RUTA` → `MENSAJE_NODO_NO_RESPONDE` («túnel activo pero el nodo X-39 no responde: motivo»),
+`DESCONOCIDO` → tercer texto. Nunca el mismo texto para dos casos. Registro en logcat, etiqueta
+`x39.nodo`: resultado del diagnóstico y motivo del fallo, pasados por `sinDirecciones` (sin URL, host,
+proxy, IP ni `.onion`; el nodo X-39 tampoco se escribe). Un diagnóstico que lance no tumba la
+comprobación. `RedServidor`/`HuellaServidor` siguen siendo rechazos del nodo, no del túnel.
+
+Pruebas JVM nuevas: `elNodoX39SiempreIntentaLaConexion_yElMensajeLoEligeElDiagnosticoDespues` (las
+tres ramas del mensaje, distintas entre sí; la sonda se hace siempre y solo a la dirección X-39;
+con nodo sano no se diagnostica; otra red → `RedIncorrecta`; diagnóstico que lanza → DESCONOCIDO;
+el registro lleva diagnóstico y motivo sin direcciones) y `elRegistroNoLlevaDireccionesDelNodoDelUsuario`
+(host, puerto, proxy, IPv4, `[IPv6]`, `.onion` y esquema fuera del registro en «Mi nodo»).
+`NodoX39Test` comprueba los tres textos. Suite JVM 58/58; Rust sin cambios (97/97). Lint en verde.
+Residuo asumido por la orden: con el túnel apagado el intento sale por la red normal hacia la IP
+privada `10.39.0.3` (fracasa; si la LAN usara `10.39.0.0/24`, el SYN llegaría a esa máquina: las
+puertas del motor —génesis, protocolo, altura— se aplican igual). Entrega:
+`client-sdk-android/entregas/selector-nodo-20261103/cierre/09-puerta-tunel.md`.
+
+### 8.10 Orden 7 (04/11/2026): sin túnel no se abre socket; ninguna excepción cruda en pantalla
+
+Evidencia del propietario (APK `624694a7…` en el Redmi): con el túnel apagado, en modo «Nodo
+X-39» la app seguía en «conectando…» hasta el timeout (abría el socket igualmente) y apareció el
+toast «Job was cancelled». G5 (texto corto) ya estaba hecho; aquí G1, G2, G3, G4 y G6.
+
+**G1 — puerta con la detección real, antes de conectar.** `NodeBridge.kt`: `puertaTunel(c)` se
+consulta ANTES de llamar al motor en modo X-39, tanto en `comprobar()` (antes de publicar
+`Conectando`: con el túnel apagado la pantalla no pasa por «conectando…») como en
+`comprobarUnaVez` (`probar`, `adoptarSiSano`). Usa SOLO `DetectorTunel` (la implementación real es
+`WalletRepository.diagnosticoTunel`: `ConnectivityManager.allNetworks`, redes con
+`TRANSPORT_VPN` cuyas rutas cubran 10.39.0.3 o con dirección en 10.39.0.0/24), nunca
+`NodoX39.tunelActivo` / `TunelX39.arriba()` (solo va al detalle del registro). Tres caminos:
+`SIN_TUNEL` con certeza → `Caido(NodoX39.MENSAJE_TUNEL)` de inmediato, cero sockets, cero llamadas
+al motor; `CON_RUTA` → se conecta a `NodoX39.servidor(red)` y solo ahí; `DESCONOCIDO` (sin
+`ConnectivityManager`, excepción, detector que lanza o sin detector inyectado) → se conecta como
+hoy: nunca se bloquea por una duda. En «Mi nodo» no hay puerta. Comprobación de ruta por bits
+(`NodoX39.prefijoCubre` / `rutaCubreNodo`, equivalente a `IpPrefix.contains`/`RouteInfo.matches`,
+nunca por texto): 10.39.0.0/24 cubre, 0.0.0.0/0 cubre, 192.168.1.0/24 no; `::/0` no cubre una
+IPv4. `WalletRepository` ya no usa `InetAddress`.
+
+**G2 — atar el socket a la red del túnel: DEUDA, no hecho.** El socket lo abre el motor Rust
+(`rust/src/nodo.rs`, `conectar_tcp`: `TcpStream::connect_timeout` sobre la dirección resuelta);
+`comprobar_nodo` (`ffi.rs`) recibe red, URL, huella, altura mínima y proxy, y ni él ni `Billetera`
+aceptan un socket, un descriptor ni una fábrica de sockets. Desde Kotlin solo hay dos vías:
+`Network.bindSocket(...)`, que exige el `Socket`/`FileDescriptor` que el motor no expone, o
+`ConnectivityManager.bindProcessToNetwork`, prohibida por la orden (ata TODO el proceso, llamadas y
+vídeo incluidos, y si la VPN cae deja la app muerta). Hacerlo exige cambiar el motor (aceptar un
+`fd` ya conectado o un callback de conexión por UniFFI) y recompilar la biblioteca certificada
+`244eaa58…`, cosa que la orden prohíbe. Riesgo residual que queda cubierto por G1: sin VPN con
+ruta no se abre socket; con VPN con ruta, el sistema enruta 10.39.0.3 por ella (ruta
+10.39.0.0/24 o por defecto). Pendiente para la próxima biblioteca.
+
+**G3 — inyección por interfaz y pruebas JVM.** `fun interface DetectorTunel` y `fun interface
+ConexionNodo` (parámetros `diagnosticoTunel` y `comprobador` de `NodeBridgeImpl`; la firma pública
+del motor, `comprobarNodo`, no cambia; los dobles de las pruebas cuentan intentos y anotan el
+destino sin abrir red). `NodeBridgeTest`: `g3a_sinVpn_ceroIntentosDeConexion_textoInmediato_sinConectando`
+(0 intentos en configurar/comprobar/conexionSana/probar/adoptar, ningún `Conectando` observado en
+el `StateFlow`, texto exacto, registro sin direcciones, «Mi nodo» sin puerta),
+`g3b_vpnConRuta_unSoloIntento_soloAlNodoX39` (exactamente 1 intento y solo a
+`tcp://10.39.0.3:50001`), `g3c_deteccionNoConcluyente_unIntento_nuncaSeBloqueaPorUnaDuda`
+(1 intento; detector que lanza y sin detector: también se intenta; los tres textos distintos);
+`NodoX39Test.laRutaCubreElNodo_porPrefijo_noPorTexto` (G3 d). Sustituye a la prueba de la orden
+6 `elNodoX39SiempreIntentaLaConexion…` (su regla cambia por orden).
+
+**G6 — ninguna excepción cruda en pantalla.** `NodeBridge.comprobarUnaVez`: `CancellationException`
+se relanza antes del `catch (Exception)` (también en `diagnosticar()`); en modo X-39 cualquier otra
+excepción da SOLO uno de los tres textos fijos (`NodoX39.mensajeFallo(estado)`, ya sin `motivo`;
+antes CON_RUTA y DESCONOCIDO llevaban «: motivo» con el texto del motor); el motivo pasa por
+`mensajeLlano` + `sinDirecciones` solo al registro `x39.nodo`. El rechazo por altura («ese nodo va
+por detrás de lo ya visto…») es texto de la app y se conserva en los dos modos (el servidor
+respondió: no es fallo del túnel). `BaseActivity.lanzar`: `CancellationException` se relanza
+(adiós «Job was cancelled»); sin `alFallar`, en pantalla solo va el texto de un `ErrorBilletera`
+(ya traducido) y cualquier otra excepción se muestra como «No se pudo completar la operación.
+Inténtalo otra vez.» con solo su clase en el registro. Pruebas:
+`g6_unaCancelacionEnMitadDeLaComprobacion_noProduceTextoDeError` (cancelación simulada y real:
+se relanza, el estado no recibe `Caido`, el registro no contiene «cancel») y
+`g6_unaExcepcionGenericaProduceElTextoFijo_nuncaSuMensaje` (cinco clases de excepción × dos
+diagnósticos → texto fijo exacto, sin mensaje ni IP; con túnel apagado 0 intentos; altura
+conservada). En «Mi nodo» no cambia nada: `mensajeLlano` (explicación fija + original entre
+paréntesis, decisión de la orden 1) sigue igual, porque es el servidor del propio usuario en su
+propia pantalla; anotado en la entrega por si el propietario quiere también texto fijo ahí.
+Quedan fuera de esta orden, con `alFallar` propio, los avisos de `EmparejarActivity`
+(`e.message ?: "paquete inválido"`: textos del propio módulo), `CrearRestaurarActivity`,
+`EscanearQrActivity` (cámara) y la preparación del Keystore en `BaseActivity`.
+
+**G4 — suites, APK, P10.** Resultados en la entrega
+`client-sdk-android/entregas/selector-nodo-20261103/cierre/10-sin-socket-sin-tunel.md`:
+
+| Qué | Antes (04/11/2026, 14:00) | Después (04/11/2026, 14:08–14:16) |
+|---|---|---|
+| `cargo test --features mainnet` / `cargo test` | 97 pasadas, 0 fallos, 6 ignoradas (cada una) | 97 pasadas, 0 fallos, 6 ignoradas (cada una); `rust/` y el candado idénticos byte a byte al diff de la entrega |
+| `:wallet:testDebugUnitTest -Px39.mainnet=true` (con `--rerun`) | 58 pruebas, 0 fallos | **63 pruebas, 0 fallos** (EmparejamientoTest 17, MnemonicoTest 9, NodeBridgeTest 29, NodoX39Test 5, PerfilBilleteraTest 3) |
+| `:sample-app:testGeneralDebugUnitTest -Px39.mainnet=true` (app, con `--rerun`) | 8 pruebas, 0 fallos | 8 pruebas, 0 fallos |
+| `:wallet:lintDebug -Px39.mainnet=true` / `:wallet:compileDebugAndroidTestKotlin` | — | BUILD SUCCESSFUL los dos (las instrumentadas solo se compilan; no hay aparato) |
+| `X39_MAINNET=1 :sample-app:assembleGeneralDebug -Px39.mainnet=true` | APK anterior `624694a7…` | APK **`eadc5173db92bf44bbdf1b5ce60dc0e48207852b7c370767b650a192d2e417bd`** (31.234.525 B), `.so` `244eaa58…`, cert `30922e27…8187` (`CN=Android Debug`); **no instalado** |
+| P10 (`strings`, mismo guion) | IP 55, `:3000` 1, `:8000` 0, `8332` 0, `3333` 54, `ckpool` 3, `stratum` 0, `rpc` 299 | idéntico, `diff` vacío frente al APK anterior; `PI5_TOKEN`/`192.0.2.46`/`:8000`/`8332`: 0 en todo el APK |
+
+Solo signet NO se ha recompilado (orden: solo mainnet); `cierre/apk/x39-llamadas-lab-signet-debug.apk`
+sigue siendo el `327dbe66…` de la orden 6 + G5, SIN G1/G6.
+
+### 8.11 Orden 8 (04/11/2026): un solo aviso, reacción inmediata al túnel, remates de pantalla
+
+Evidencia del propietario (Redmi, mainnet, APK `eadc5173…`, 04/11): la puerta de la orden 7
+funciona (túnel apagado → texto fijo inmediato y 0 sockets; túnel activo → nodo sano; reinicio →
+configuración conservada y registro sin direcciones; registros `cierre/11`, `12` y `13b`). Tres
+cosas de pantalla, ninguna de seguridad, vistas en esa prueba:
+
+**H1 — un solo aviso por suceso.** Con el túnel apagado el mismo texto salía tres veces: línea de
+estado del nodo («⚠ nodo caído: Túnel apagado…»), línea de último error («⚠ el nodo no está
+disponible: Túnel apagado…») y un toast. Ahora `WalletRepository.conRed` lanza
+`NodoNoDisponible(estadoNodo)` (subclase de `ErrorBilletera`, con el texto que ya muestra la
+línea del nodo), `sincronizar` fija `Vista.ultimoError = errorParaLaVista(e, nodo.estado.value)`
+(función pura: `null` si `loMuestraElNodo(e, estado)`, es decir, si el fallo es «nodo no
+disponible» y su motivo es exactamente `estado.describir()`; cualquier otro fallo, su texto una
+vez), y en `BilleteraActivity` los botones «Sincronizar» y «Reintentar la misma transacción» pasan
+por `lanzarSinRepetirElNodo`, que no hace toast en ese mismo caso. La regla no depende del texto
+del túnel: vale para cualquier estado del nodo que la línea ya enseñe (caído, otra red, huella,
+conectando). Las demás pantallas (Enviar, Historial, Recibir) no tienen línea de estado del nodo y
+siguen avisando una vez con el toast. Pruebas JVM nuevas (`WalletRepositoryTest`):
+`h1_siElNodoYaMuestraElMotivo_laSincronizacionNoLoRepite` (nodo en `Caido(texto fijo)` por el
+detector «sin túnel», `conexionSana()` nulo y 0 intentos, la excepción tal como la construye
+`conRed` → `ultimoError` nulo; también con «reintento en N s» y con los otros estados) y
+`h1_unFalloDeOtroTipo_seMuestraUnaVez` (motor, fondos, red con el nodo sano, y un «nodo no
+disponible» cuyo motivo ya no es el de la línea → se muestra una vez). `sincronizar` entero no se
+prueba en JVM (exige `Context` y billetera en disco): se prueba la decisión que él llama, con la
+misma excepción.
+
+**H2 — reacción inmediata al túnel.** `fun interface SenalRed { fun escuchar(alCambiar: () ->
+Unit): () -> Unit }` (`NodeBridge.kt`), parámetro `senalRed` de `NodeBridgeImpl` (por defecto, sin
+señal) y `reboteMs` (500 ms, `REBOTE_MS`). La real es `WalletRepository.senalRedVpn(ctx)`: un
+`ConnectivityManager.NetworkCallback` registrado con `NetworkRequest` de `TRANSPORT_VPN` (y sin
+`NET_CAPABILITY_NOT_VPN`, que la petición lleva por defecto), `onAvailable` /
+`onLinkPropertiesChanged` / `onLost` → `alCambiar()`; la función devuelta hace
+`unregisterNetworkCallback`. En `vigilar(true)` se registra y en `vigilar(false)` se retira (sin
+fugas); si `escuchar` lanza (permiso, demasiados callbacks) se anota en `x39.nodo` y la vigilancia
+sigue como antes con la espera creciente. La señal solo `trySend` a un canal conflado
+(`despertador`); el bucle de la vigilancia espera «lo primero que llegue» entre la espera inyectada
+y la señal (`esperarODespertar`, `select`), tras la señal espera el rebote y vacía el canal (una
+ráfaga = una comprobación), pone `intento = 0` y comprueba por `comprobar()` → la puerta y
+`diagnosticoTunel` deciden como siempre (sin túnel: 0 sockets). Decisión añadida: si el nodo está
+sano, el modo es X-39 y el diagnóstico sigue `CON_RUTA`, la señal no comprueba nada (registro
+«cambio de red sin efecto»): es el `onAvailable` inicial que el sistema emite al registrar el
+callback con la VPN ya levantada, y sin esta regla cada `onResume` abriría un segundo socket medio
+segundo después del primero. Pruebas JVM (`NodeBridgeTest`, dobles `SenalSimulada` y
+`EsperaControlada`: la espera larga no termina sola, solo la señal la interrumpe):
+`h2_unaSenalDeRedDespiertaLaVigilancia_pasaPorLaPuerta_ySeRetiraAlDesactivar` (a, b, c: con el
+túnel apagado y la vigilancia en espera ≈2 s, la señal comprueba enseguida y la espera vuelve a
+≈2 s; sigue sin túnel → 0 sockets; con ruta → 1 intento y solo a 10.39.0.3:50001, sano, espera
+60 s; se apaga → texto fijo sin socket; `vigilar(false)` retira el callback y una señal tardía no
+hace nada; al reactivar se vuelve a registrar), `h2_variasSenalesSeguidas_unaSolaComprobacionPorRebote`
+(d: 5 señales dentro del rebote → 1 comprobación; otra ráfaga → otra) y
+`h2_senalConNodoSanoYTunelConRuta_noAbreOtroSocket_ySinSenalLaVigilanciaSigue` (sin efecto con
+sano + CON_RUTA; con SIN_TUNEL sí, sin socket; `escuchar` que lanza `SecurityException` → la
+vigilancia arranca y espera 2, 4 s como siempre).
+
+**H3 — Ajustes → Nodo.** `AjustesActivity.mostrar(m)`: si el modo mostrado no es el del nodo en
+uso, la etiqueta ya no dice «Nodo: sin configurar» en naranja: dice, en gris, «Sin probar todavía.
+En uso: X-39 por túnel.» (o «En uso: el tuyo (host).» en el caso simétrico, el mismo `when`);
+«sin configurar» queda solo cuando de verdad no hay nodo (`config == null`). El nodo en uso no
+cambia; la billetera lo sigue leyendo igual.
+
+**G4.** Suites, APK y P10 en `cierre/14-orden8.md` de la entrega:
+
+| Qué | Antes (04/11/2026, 15:49) | Después (15:53–16:05) |
+|---|---|---|
+| `cargo test --features mainnet` / `cargo test` | 97 pasadas, 0 fallos, 6 ignoradas (cada una) | no se repite: `rust/` y `android/build-native.lock` no se tocan (diff idéntico, fichero a fichero, al `x39-wallet.diff` de la orden 7) |
+| `:wallet:testDebugUnitTest -Px39.mainnet=true --rerun` | 63 pruebas, 0 fallos | **68 pruebas, 0 fallos** (EmparejamientoTest 17, MnemonicoTest 9, NodeBridgeTest 32, NodoX39Test 5, PerfilBilleteraTest 3, WalletRepositoryTest 2) |
+| `:sample-app:testGeneralDebugUnitTest -Px39.mainnet=true --rerun` | 8 pruebas, 0 fallos | 8 pruebas, 0 fallos |
+| `:wallet:lintDebug` / `:wallet:compileDebugAndroidTestKotlin` | — | BUILD SUCCESSFUL los dos, 0 avisos |
+| `X39_MAINNET=1 :sample-app:assembleGeneralDebug -Px39.mainnet=true` | APK anterior `eadc5173…` | APK **`2c9377e4a65d1a8c6182f6add5bcd9b3c4883e34ca32f8592a81c046a76076a3`** (31.234.525 B), `.so` `244eaa58…`, cert `30922e27…8187`; **no instalado** |
+| P10 (`cierre/14-p10.sh`, guion reconstruido y guardado esta vez) | — | totales y referencias idénticos a los de la orden 7 (IP 55, `:3000` 1, `:8000` 0, `8332` 0, `3333` 54, `ckpool` 3, `stratum` 0, `rpc` 299); solo `tcp://10.39.0.3:50001` y `:60601`; `PI5_TOKEN`/`192.0.2.46`/`:8000`/`8332`: 0 |
+
+Signet NO se recompila (solo mainnet); el APK de signet sigue siendo el `327dbe66…` de la orden 6 + G5.
+
+Pendiente en el móvil (propietario): con el túnel apagado, el texto UNA sola vez y ningún toast
+al pulsar «Sincronizar»; al encender el túnel, «nodo sano» en pocos segundos sin tocar nada; al
+apagarlo con la app abierta, el aviso en pocos segundos; en Ajustes → Nodo con «Mi nodo» marcado,
+«Sin probar todavía. En uso: X-39 por túnel.» en gris.
+
+### 8.12 Orden 9a (04/11/2026): cinco idiomas, camino de release, instrumentadas
+
+Entrega completa en `client-sdk-android/entregas/selector-nodo-20261103/cierre/18-orden9a.md` (inventario de
+textos en `18-inventario-textos.txt`, P10 en `18-p10-strings-orden9a-*.txt`, instrumentadas en
+`17-instrumentadas-20261104/`).
+
+**I1 — cinco idiomas.** Inventario previo: 417 literales en `android/wallet/src/main/java/x39/wallet/android`
+(209 de pantalla, 136 mensajes internos que llegan a pantalla, 19 de registro, 53 que no son texto). Todos los
+de pantalla pasan a `res/values/strings.xml` (castellano, base) + `values-en`, `values-zh-rCN`, `values-ja`,
+`values-ar`: 344 claves idénticas por carpeta, prefijo `x39w_`. Los mensajes de la lógica (los tres del túnel,
+el de altura, los del estado del nodo, los de `invalida()`, `mensajeLlano`, `WalletRepository.mensaje`,
+`Emparejamiento.analizar`, `JsonEstricto`, `AlmacenSemilla`…) NO cambian: siguen en castellano como claves
+estables (las comprueban estas suites y los lee el propietario en `x39.nodo`); `Textos.kt` (tabla de 129
+patrones → recurso `x39w_m_*`, con anidamiento) los traduce SOLO al pintar (`Context.textoPantalla`). El
+módulo sigue el idioma del selector de la app sin acoplarse: la app usa `AppCompatDelegate.setApplicationLocales`
+(de proceso) y las nueve pantallas del módulo son `AppCompatActivity`. Árabe: `supportsRtl` de la app, flecha
+de volver invertida, márgenes y paddings relativos. Ninguna prueba JVM existente cambia (ninguna comprobaba
+un texto que ahora sea recurso). Pruebas nuevas, `TextosTest` (3): paridad de claves y huecos en las cinco
+carpetas (y = `R.string`); ida y vuelta EXACTA en castellano de 140 muestras que cubren las 129 entradas; cada
+entrada con recurso en los cinco idiomas, sin huecos sin rellenar. Lint 0 avisos. Comprobado por el
+propietario en el Redmi en los cinco idiomas: PASA.
+
+**I2 — release del sabor con billetera.** `~/x39_mensajeria/scripts/build_llamadas_lab_release.sh` (hermano de
+`build_llamadas_release.sh`): `assembleGeneralRelease` con `X39_MAINNET=1 -Px39.mainnet=true`, firma con
+`~/x39-release.jks` alias `x39` (contraseña por `read -s`, comprobada con `keytool`, nunca en ficheros ni en la
+línea de comandos), comprobaciones del de `comunicaciones` + billetera en el manifiesto + `.so` `244eaa58…`
+dentro del APK + dex mainnet + P10 (`cierre/14-p10.sh`); 20 permisos (18 + `USE_BIOMETRIC` + `USE_FINGERPRINT`);
+destino `cierre/apk/x39-llamadas-lab-mainnet-release.apk`; sin OTS, sin publicar, sin instalar (el Redmi lleva la
+clave de depuración). Validado sin firmar (`X39_LAB_SIN_FIRMAR=1`): `8ce74581…`, 23.094.250 B, 12 ✓. Firmado por el
+propietario (17:42, sin ✗): `cierre/apk/x39-llamadas-lab-mainnet-release.apk`
+**`fc9abe0187ab74110728f84fdc29cc54455ac4715337fe0e153d47ec3e7dd5eb`** (23.186.328 B), certificado
+`72f0745f993605b1b3cd30966162b6d98d84fcacbd23e2e07e24c3d15f7d8935` (`CN=x39`), versionCode 43 / 1.0.6, P10
+limpio (las 3 «192.168.» son los vectores SIP de JAIN-SIP, las mismas que en el de depuración). NO instalado.
+
+**I3 — instrumentadas en el Redmi.** Receta en la entrega (WSL «mirrored» → el `adb` de Linux usa el servidor
+de Windows en `127.0.0.1:5037`; `ANDROID_SERIAL` del Redmi; `:wallet:connectedDebugAndroidTest`). Tres pasadas:
+1.ª 17 pasan / 16 fallan / 1 omitida (13 pruebas fuerzan signet y la edición es mainnet; 2 de fechas con la
+misma causa; 1 con el directorio fijo del perfil de pruebas); 2.ª (13 `assumeTrue(Redes.permitida(Red.SIGNET))`)
+17 / 3 / 14; 3.ª (2 `assumeTrue` más y `PerfilBilletera.actual.directorio` en `recuperarLaClave` y su
+`limpiar()`) 17 / 1 / 16 (`recuperarLaClave` borraba `ALIAS_POR_DEFECTO`, alias del perfil de pruebas, y en
+mainnet la semilla vive bajo `PerfilBilletera.MAINNET.aliasSemilla`); 4.ª (`PerfilBilletera.actual.aliasSemilla`,
+con el visto bueno del propietario y tras confirmar que el paquete de pruebas `x39.wallet.test` tiene UID y
+Keystore propios, distintos de `org.x39matrix.llamadas.lab` uid 10537) **18 pasan, 0 fallan, 16 omitidas**,
+BUILD SUCCESSFUL. Solo código de pruebas; en la edición de prueba siguen corriendo enteras. Las
+instrumentadas instalan `x39.wallet.test`, nunca `.lab`.
+
+| Qué | Antes (04/11/2026, 16:38) | Después |
+|---|---|---|
+| `cargo test --features mainnet` / `cargo test` | 97 pasadas, 0 fallos, 6 ignoradas | no se repite: `rust/` y el candado sin cambios (diff idéntico fichero a fichero) |
+| `:wallet:testDebugUnitTest -Px39.mainnet=true` (`--rerun`) | 68 pruebas, 0 fallos | **71 pruebas, 0 fallos** (+ `TextosTest` 3) |
+| `:sample-app:testGeneralDebugUnitTest -Px39.mainnet=true` (app) | 8, 0 fallos | 8, 0 fallos |
+| `:wallet:lintDebug` / `compileDebugAndroidTestKotlin` | — | BUILD SUCCESSFUL, 0 avisos / BUILD SUCCESSFUL |
+| `X39_MAINNET=1 :sample-app:assembleGeneralDebug -Px39.mainnet=true` | APK anterior `2c9377e4…` | APK **`822968658740e80f05de3fa001165b172368334eb23ea3af27af2201250d8af5`** (31.234.525 B), `.so` `244eaa58…`, cert `30922e27…8187`; instalado y recorrido por el propietario |
+| P10 | IP 55, resto como la orden 7 | IP **68**: las 13 nuevas son `127.0.0.1:9050` (proxy de Orbot) en los textos de los cinco idiomas de `resources.arsc`, que antes estaban en el dex; `:3000`/`8332`/`3333`/`rpc` idénticos; solo `tcp://10.39.0.3:50001` y `:60601`; `PI5_TOKEN`/`192.0.2.46`/`8332`: 0 |
+
 ## 3. Pendiente de probar
 
 - Envío real en **signet** desde la app en el aparato: **hecho** (§5.1, 10.000 sat, bloque

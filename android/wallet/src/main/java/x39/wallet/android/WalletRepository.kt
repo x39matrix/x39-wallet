@@ -20,7 +20,14 @@ import x39.wallet.estimarComision
 import x39.wallet.nuevaSemilla
 
 /** Error con mensaje para la pantalla; envuelve el del motor sin perderlo. */
-class ErrorBilletera(mensaje: String, causa: Throwable? = null) : Exception(mensaje, causa)
+open class ErrorBilletera(mensaje: String, causa: Throwable? = null) : Exception(mensaje, causa)
+
+/**
+ * Una operación de red no se ha hecho porque el nodo no está sano AHORA (orden 8, H1).
+ * `estadoNodo` es el texto que ya muestra la línea de estado del nodo ([EstadoNodo.describir]):
+ * quien lo reciba puede comprobar con [WalletRepository.loMuestraElNodo] si repetirlo o no.
+ */
+class NodoNoDisponible(val estadoNodo: String) : ErrorBilletera("el nodo no está disponible: $estadoNodo")
 
 /** Lo que las pantallas usan del repositorio; una implementación falsa sirve para probarlas. */
 @RequiresApi(Build.VERSION_CODES.M)
@@ -43,6 +50,11 @@ interface Repositorio {
     suspend fun firmar(id: String, mnemonico: Mnemonico): EnvioInfo
     suspend fun difundir(txid: String): EnvioInfo
     suspend fun cancelar(txid: String): EnvioInfo
+    /**
+     * Huella SPKI del certificado que presenta un servidor `ssl://`, SIN validarlo y sin hablar
+     * Electrum: para mostrársela al usuario antes de que decida fijarla («certificado propio»).
+     */
+    suspend fun huellaServidor(electrum: String, proxySocks5: String?): String
 }
 
 /**
@@ -70,6 +82,12 @@ class WalletRepository(context: Context) : Repositorio {
         ajustes,
         ambito,
         hayVpnActiva = { hayVpnActiva(ctx) },
+        // Nodo X-39: ANTES de conectar, esta detección (redes VPN del sistema con ruta a 10.39.0.3)
+        // decide si se abre socket; sin túnel con certeza, no. Si falla la conexión, elige el texto.
+        diagnosticoTunel = { diagnosticoTunel(ctx) },
+        // H2: la aparición o desaparición de una red VPN despierta la vigilancia enseguida; la
+        // decisión sigue siendo de la puerta y de diagnosticoTunel.
+        senalRed = senalRedVpn(ctx),
         // Suelo de altura: la de la billetera abierta si es de la misma red; 0 si no la hay.
         // No toma mutexRed, mutexBilletera ni mutexEnvio: lee `abierta` (@Volatile), compara una
         // red inmutable y solo toma el mutex hoja de Billetera en Rust. Si la billetera se cierra
@@ -134,7 +152,7 @@ class WalletRepository(context: Context) : Repositorio {
                 // La marca va a disco ANTES de intentar escanear: si el proceso muere, al
                 // reabrir sigue pendiente.
                 marcaEscaneo.writeText("restaurada; escaneo completo pendiente\n")
-                if (ajustes.hayServidor()) {
+                if (nodo.config != null) {
                     try {
                         conRed { cm -> motor { abierta!!.motor.escanear(cm.url) } }
                         marcaEscaneo.delete()
@@ -186,8 +204,10 @@ class WalletRepository(context: Context) : Repositorio {
             if (pendiente) marcaEscaneo.delete()
             refrescarLocal()
         } catch (e: Exception) {
-            _vista.value = _vista.value.copy(sincronizando = false, ultimoError = mensaje(e))
-            throw ErrorBilletera(mensaje(e), e)
+            // H1: si el nodo no está disponible y su línea de estado ya muestra el motivo, la
+            // vista no lo repite en `ultimoError`; cualquier otro fallo se muestra una vez.
+            _vista.value = _vista.value.copy(sincronizando = false, ultimoError = errorParaLaVista(e, nodo.estado.value))
+            throw if (e is NodoNoDisponible) e else ErrorBilletera(mensaje(e), e)
         }
     }
 
@@ -201,7 +221,11 @@ class WalletRepository(context: Context) : Repositorio {
         // sesión). Es la misma que usa el motor en sincronizar, escanear y difundir.
         // No se pasa un 0 fijo: sale de estado.dat y solo es 0 antes de la primera sincronización.
         val b = billetera()
-        conRed { cm -> motor { estimarComision(ajustes.red, cm.url, bloques, cm.huella, b.altura()) } }
+        conRed { cm -> motor { estimarComision(ajustes.red, cm.url, bloques, cm.huella, b.altura(), cm.proxy) } }
+    }
+
+    override suspend fun huellaServidor(electrum: String, proxySocks5: String?): String = withContext(Dispatchers.IO) {
+        motor { x39.wallet.huellaServidor(electrum, proxySocks5) }
     }
 
     /** Paso 1 de enviar: la revisión. Mientras se revisa, nadie más envía (mutex). */
@@ -241,9 +265,10 @@ class WalletRepository(context: Context) : Repositorio {
      * que ninguna otra operación pueda cambiar la huella entre medias.
      */
     private suspend fun <T> conRed(f: (ConexionMotor) -> T): T = mutexRed.withLock {
-        if (ajustes.urlServidor().isEmpty()) throw ErrorBilletera("no hay servidor Electrum configurado: ponlo en Ajustes")
-        val cm = nodo.conexionSana() ?: throw ErrorBilletera("el nodo no está disponible: ${nodo.estado.value.describir()}")
-        abierta?.motor?.fijarHuellaServidor(cm.huella)
+        if (nodo.config == null) throw ErrorBilletera("no hay nodo configurado: elígelo en Ajustes → Nodo")
+        val cm = nodo.conexionSana() ?: throw NodoNoDisponible(nodo.estado.value.describir())
+        // Huella y proxy de la MISMA generación que la URL; nada puede cambiarlos entre medias.
+        abierta?.motor?.let { it.fijarHuellaServidor(cm.huella); it.fijarProxySocks5(cm.proxy) }
         f(cm)
     }
 
@@ -274,21 +299,34 @@ class WalletRepository(context: Context) : Repositorio {
         throw ErrorBilletera(e.message ?: "error", e)
     }
 
-    private fun mensaje(e: Throwable): String = when (e) {
-        is ErrorBilletera -> e.message ?: "error"
-        is x39.wallet.Exception.Fondos -> "fondos insuficientes para el envío y la comisión"
-        is x39.wallet.Exception.Direccion -> "dirección inválida o de otra red"
-        is x39.wallet.Exception.RedServidor -> "ese servidor es de otra red: ${e.message}"
-        is x39.wallet.Exception.Red -> mensajeAlturaSiAplica(e.message) ?: "sin respuesta del servidor: ${e.message}"
-        is x39.wallet.Exception.EnvioEnCurso -> "hay un envío sin resolver; reintenta o cancela antes"
-        is x39.wallet.Exception.Revision -> "la revisión no coincide con lo que se iba a firmar: ${e.message}"
-        is x39.wallet.Exception.Pendiente -> "la revisión caducó; prepara el envío otra vez"
-        is x39.wallet.Exception.Semilla -> "la semilla no es la de esta billetera"
-        is x39.wallet.Exception.RedProhibida -> "red no permitida en esta edición"
-        else -> e.message ?: e.javaClass.simpleName
-    }
-
     companion object {
+        /** Traduce las excepciones del motor a un texto para la pantalla. */
+        internal fun mensaje(e: Throwable): String = when (e) {
+            is ErrorBilletera -> e.message ?: "error"
+            is x39.wallet.Exception.Fondos -> "fondos insuficientes para el envío y la comisión"
+            is x39.wallet.Exception.Direccion -> "dirección inválida o de otra red"
+            is x39.wallet.Exception.RedServidor -> "ese servidor es de otra red: ${e.message}"
+            is x39.wallet.Exception.Red -> mensajeAlturaSiAplica(e.message) ?: "sin respuesta del servidor: ${mensajeLlano(e.message ?: "")}"
+            is x39.wallet.Exception.EnvioEnCurso -> "hay un envío sin resolver; reintenta o cancela antes"
+            is x39.wallet.Exception.Revision -> "la revisión no coincide con lo que se iba a firmar: ${e.message}"
+            is x39.wallet.Exception.Pendiente -> "la revisión caducó; prepara el envío otra vez"
+            is x39.wallet.Exception.Semilla -> "la semilla no es la de esta billetera"
+            is x39.wallet.Exception.RedProhibida -> "red no permitida en esta edición"
+            else -> e.message ?: e.javaClass.simpleName
+        }
+
+        /**
+         * H1: ¿el fallo `e` es «el nodo no está disponible» y su motivo es exactamente el que ya
+         * muestra la línea de estado del nodo (`nodo`)? Entonces la pantalla no lo repite (ni en
+         * `ultimoError` ni en un toast). Función pura, probada en JVM.
+         */
+        fun loMuestraElNodo(e: Throwable, nodo: EstadoNodo): Boolean =
+            e is NodoNoDisponible && e.estadoNodo == nodo.describir()
+
+        /** H1: texto para `Vista.ultimoError` tras un fallo, o `null` si la línea del nodo ya lo dice. */
+        internal fun errorParaLaVista(e: Throwable, nodo: EstadoNodo): String? =
+            if (loMuestraElNodo(e, nodo)) null else mensaje(e)
+
         // Guarda el applicationContext, no una Activity: no hay fuga.
         @android.annotation.SuppressLint("StaticFieldLeak")
         @Volatile private var instancia: WalletRepository? = null
@@ -305,21 +343,85 @@ class WalletRepository(context: Context) : Repositorio {
             paraPruebas = r
         }
 
-        /** ¿Hay una VPN activa en el aparato? (`TRANSPORT_VPN` en alguna red). */
+        /**
+         * Detección real del X39 Túnel (antes de conectar en modo X-39 y, si la conexión falla,
+         * para elegir el texto): recorre TODAS las redes del sistema (no solo la activa: con rutas
+         * parciales la VPN no es la red por defecto) y busca una con transporte VPN cuyas rutas
+         * cubran 10.39.0.3 (vale una ruta 10.39.0.0/24 o una ruta por defecto 0.0.0.0/0 por la VPN;
+         * comparación de prefijo por bits en [NodoX39.rutaCubreNodo], nunca por texto) o con una
+         * dirección en 10.39.0.0/24. La pista de la app ([NodoX39.tunelActivo]) solo se anota en el
+         * detalle. Sin DNS, sin sockets, sin `InetAddress`.
+         */
+        @Suppress("DEPRECATION") // allNetworks: la alternativa (NetworkCallback) exige registro asíncrono
+        fun diagnosticoTunel(ctx: Context): DiagnosticoTunel {
+            val pista = try { NodoX39.tunelActivo?.invoke() } catch (_: Exception) { null }
+            return try {
+                val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+                    ?: return DiagnosticoTunel(EstadoTunel.DESCONOCIDO, "sin ConnectivityManager; túnel de la app: $pista")
+                var vpns = 0
+                var conRuta = 0
+                for (red in cm.allNetworks) {
+                    val cap = cm.getNetworkCapabilities(red) ?: continue
+                    if (!cap.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) continue
+                    vpns++
+                    val lp = cm.getLinkProperties(red) ?: continue
+                    val porRuta = lp.routes.any { r -> NodoX39.rutaCubreNodo(r.destination.address.address, r.destination.prefixLength) }
+                    val porDireccion = lp.linkAddresses.any { la -> NodoX39.direccionEnRedTunel(la.address.address) }
+                    if (porRuta || porDireccion) conRuta++
+                }
+                if (conRuta > 0) DiagnosticoTunel(EstadoTunel.CON_RUTA, "redes VPN: $vpns, con ruta a 10.39.0.0/24: $conRuta; túnel de la app: $pista")
+                else DiagnosticoTunel(EstadoTunel.SIN_TUNEL, "redes VPN: $vpns, ninguna con ruta a 10.39.0.0/24; túnel de la app: $pista")
+            } catch (e: Exception) {
+                DiagnosticoTunel(EstadoTunel.DESCONOCIDO, "fallo al consultar las redes: ${e.javaClass.simpleName}; túnel de la app: $pista")
+            }
+        }
+
+        /**
+         * Señal de cambio de red para la vigilancia (orden 8, H2): un `NetworkCallback` del sistema
+         * para las redes con transporte VPN (aparece, cambian sus rutas o direcciones, desaparece).
+         * Solo DESPIERTA a `vigilar`: la decisión de abrir socket sigue siendo de la puerta y de
+         * [diagnosticoTunel]. El callback se registra al activar la vigilancia y se retira al
+         * desactivarla con la función devuelta. Sin `ConnectivityManager` no hay señal (y no pasa
+         * nada); si el registro lanza (permiso, demasiados callbacks…), la excepción sube y
+         * NodeBridge sigue con la espera creciente. Nunca abre red ni resuelve nombres.
+         */
+        fun senalRedVpn(ctx: Context): SenalRed = object : SenalRed {
+            override fun escuchar(alCambiar: () -> Unit): () -> Unit {
+                val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+                    ?: return { }
+                val cb = object : android.net.ConnectivityManager.NetworkCallback() {
+                    override fun onAvailable(network: android.net.Network) = alCambiar()
+                    override fun onLinkPropertiesChanged(network: android.net.Network, linkProperties: android.net.LinkProperties) = alCambiar()
+                    override fun onLost(network: android.net.Network) = alCambiar()
+                }
+                val peticion = android.net.NetworkRequest.Builder()
+                    .addTransportType(android.net.NetworkCapabilities.TRANSPORT_VPN)
+                    // Una petición lleva NOT_VPN por defecto: sin quitarla, nunca llegaría una VPN.
+                    .removeCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                    .build()
+                cm.registerNetworkCallback(peticion, cb)
+                return { try { cm.unregisterNetworkCallback(cb) } catch (_: Exception) { } }
+            }
+        }
+
+        /** ¿Hay una VPN activa en el aparato? (`TRANSPORT_VPN` en la red activa; para el modo EXTERNO). */
         fun hayVpnActiva(ctx: Context): Boolean {
             val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return false
             val red = cm.activeNetwork ?: return false
             return cm.getNetworkCapabilities(red)?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) == true
         }
 
-        fun EstadoEnvio.texto(): String = when (this) {
-            EstadoEnvio.FIRMADA -> "firmada, sin difundir"
-            EstadoEnvio.DIFUNDIENDO -> "difundiendo"
-            EstadoEnvio.ENVIADA -> "enviada"
-            EstadoEnvio.FALLIDA -> "reemplazo perdido"
-            EstadoEnvio.INCIERTA -> "difusión incierta"
-            EstadoEnvio.CONFIRMADA -> "confirmada"
-            EstadoEnvio.CANCELADA -> "cancelada"
-        }
+        /** Texto de pantalla del estado de un envío, en el idioma de la app. */
+        fun EstadoEnvio.texto(c: Context): String = c.getString(
+            when (this) {
+                EstadoEnvio.FIRMADA -> x39.wallet.R.string.x39w_envio_firmada
+                EstadoEnvio.DIFUNDIENDO -> x39.wallet.R.string.x39w_envio_difundiendo
+                EstadoEnvio.ENVIADA -> x39.wallet.R.string.x39w_envio_enviada
+                EstadoEnvio.FALLIDA -> x39.wallet.R.string.x39w_envio_fallida
+                EstadoEnvio.INCIERTA -> x39.wallet.R.string.x39w_envio_incierta
+                EstadoEnvio.CONFIRMADA -> x39.wallet.R.string.x39w_envio_confirmada
+                EstadoEnvio.CANCELADA -> x39.wallet.R.string.x39w_envio_cancelada
+            },
+        )
     }
 }

@@ -30,7 +30,7 @@ class RecuperacionYEscaneoInstrumentadoTest {
 
     private fun limpiar(repo: WalletRepository) {
         repo.cerrar()
-        File(ctx.noBackupFilesDir, "x39-wallet").deleteRecursively()
+        PerfilBilletera.actual.directorio(ctx.noBackupFilesDir).deleteRecursively() // el directorio de la edición compilada, no el fijo de pruebas
         // Por NodeBridge, no escribiendo las preferencias a mano: la configuración activa vive en él.
         kotlinx.coroutines.runBlocking { repo.nodo.olvidar() }
     }
@@ -61,13 +61,15 @@ class RecuperacionYEscaneoInstrumentadoTest {
             val estado = repo.ficheroEstado()
             registroConUnaFirmada(estado)
             repo.almacen.asegurarClave()
-            File(ctx.noBackupFilesDir, "x39-wallet/semilla.enc").writeText("fichero cifrado con la clave antigua (simulado)")
+            File(PerfilBilletera.actual.directorio(ctx.noBackupFilesDir), "semilla.enc").writeText("fichero cifrado con la clave antigua (simulado)")
             val shaEstado = sha(estado)
             val shaEnvios = sha(File(estado.path + ".envios.json"))
             assertEquals(WalletRepository.Estado.LISTA, repo.estado())
 
             // Invalidación: el Keystore pierde la clave.
-            KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(AlmacenSemilla.ALIAS_POR_DEFECTO)
+            // El alias de la edición compilada (en mainnet, «…-mainnet»), no el fijo del perfil de pruebas. Solo alcanza
+            // las claves del UID de este paquete de pruebas (x39.wallet.test): el Keystore aísla por UID.
+            KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(PerfilBilletera.actual.aliasSemilla)
             assertEquals(WalletRepository.Estado.CLAVE_INVALIDADA, repo.estado())
 
             // Palabras equivocadas: no coinciden; nada cambia.
@@ -92,6 +94,7 @@ class RecuperacionYEscaneoInstrumentadoTest {
 
     @Test
     fun restaurarSinServidor_dejaEscaneoPendiente_ySincronizarLoCompleta() = runBlocking {
+        assumeTrue("solo en la edición de prueba (signet); en mainnet no aplica", Redes.permitida(Red.SIGNET))
         val repo = WalletRepository(ctx)
         limpiar(repo)
         try {

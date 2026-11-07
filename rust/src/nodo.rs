@@ -47,6 +47,15 @@
 //! Kotlin (`ConfigNodo.invalida()`), no el motor; el motor acepta `ssl://` sin huella
 //! validando contra las raíces públicas. Con `tcp://` no hay cifrado: se informa
 //! (`cifrado = false`) y la capa de arriba avisa.
+//!
+//! Proxy SOCKS5 (Tor/Orbot): si quien llama da un proxy `host:puerto`, el transporte TCP se abre
+//! hacia el proxy y se le pide CONNECT al destino con su nombre tal cual (ATYP 3), de modo que
+//! quien resuelve el nombre es el proxy (Tor resuelve `.onion`). Un destino `.onion` SIN proxy
+//! se rechaza antes de abrir ningún socket: el motor no resuelve `.onion` ni lo intenta.
+//!
+//! `huella_servidor` abre solo el apretón de manos TLS (ningún mensaje Electrum) y devuelve la
+//! huella SPKI que presenta el servidor, para que la capa de arriba la muestre y, solo si el
+//! usuario lo decide expresamente («certificado propio»), la fije.
 
 use crate::{network_permitida, red_err, Error, Red, ESPERA_RED};
 use bdk_electrum::electrum_client::raw_client::RawClient;
@@ -65,7 +74,7 @@ use rustls::pki_types::{CertificateDer, Der, ServerName, TrustAnchor, UnixTime};
 use rustls::{ClientConfig, ClientConnection, DigitallySignedStruct, RootCertStore, StreamOwned};
 use std::borrow::Borrow;
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{IpAddr, TcpStream};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -128,6 +137,14 @@ impl Destino {
     }
 }
 
+impl Destino {
+    /// Servicio oculto de Tor: solo se alcanza mediante un proxy SOCKS5. El motor no resuelve
+    /// `.onion` ni lo intenta: sin proxy se niega antes de abrir ningún socket.
+    pub fn es_onion(&self) -> bool {
+        self.host.to_ascii_lowercase().ends_with(".onion")
+    }
+}
+
 /// Huella SPKI: SHA-256 del `SubjectPublicKeyInfo` (DER) del certificado de entidad final.
 pub(crate) fn huella_spki(cert: &CertificateDer<'_>) -> Result<[u8; 32], rustls::Error> {
     let eec = webpki::EndEntityCert::try_from(cert)
@@ -144,10 +161,11 @@ fn analizar_huella(hex: &str) -> Result<[u8; 32], Error> {
 }
 
 /// Verificador TLS que SOLO acepta el certificado cuyo SPKI tiene la huella esperada.
-/// Guarda la huella vista para poder informarla.
+/// Guarda la huella vista para poder informarla. Con `esperada == None` solo OBSERVA: acepta el
+/// certificado y anota su huella; se usa únicamente en [`huella_servidor`], que no habla Electrum.
 #[derive(Debug)]
 struct VerificadorHuella {
-    esperada: [u8; 32],
+    esperada: Option<[u8; 32]>,
     vista: Mutex<Option<[u8; 32]>>,
     proveedor: Arc<rustls::crypto::CryptoProvider>,
 }
@@ -163,10 +181,12 @@ impl ServerCertVerifier for VerificadorHuella {
     ) -> Result<ServerCertVerified, rustls::Error> {
         let vista = huella_spki(end_entity)?;
         *self.vista.lock().unwrap_or_else(|p| p.into_inner()) = Some(vista);
-        if vista != self.esperada {
-            return Err(rustls::Error::General(
-                "huella del servidor distinta de la esperada".into(),
-            ));
+        if let Some(esperada) = self.esperada {
+            if vista != esperada {
+                return Err(rustls::Error::General(
+                    "huella del servidor distinta de la esperada".into(),
+                ));
+            }
         }
         Ok(ServerCertVerified::assertion())
     }
@@ -555,15 +575,17 @@ pub(crate) struct Conexion {
 impl Conexion {
     /// Conecta y pasa las CUATRO puertas, en este orden: huella (con `ssl://` y huella),
     /// protocolo 1.4 (`server.version`, primer mensaje), génesis de `red` y altura no inferior
-    /// a `altura_minima` (0 = nada visto todavía).
+    /// a `altura_minima` (0 = nada visto todavía). `proxy`: proxy SOCKS5 `host:puerto` por el
+    /// que abrir el transporte (obligatorio para un destino `.onion`); `None` = directo.
     pub fn abrir(
         servidor: &str,
         red: Network,
         huella: Option<&str>,
         espera: Duration,
         altura_minima: u32,
+        proxy: Option<&str>,
     ) -> Result<Conexion, Error> {
-        Self::abrir_validada(servidor, red, huella, espera, altura_minima).map(|(c, _)| c)
+        Self::abrir_validada(servidor, red, huella, espera, altura_minima, proxy).map(|(c, _)| c)
     }
 
     /// Como [`Conexion::abrir`], devolviendo además lo que la conexión comprobó.
@@ -573,6 +595,7 @@ impl Conexion {
         huella: Option<&str>,
         espera: Duration,
         altura_minima: u32,
+        proxy: Option<&str>,
     ) -> Result<(Conexion, Validacion), Error> {
         let red = network_permitida(red)?;
         let destino = Destino::analizar(servidor)?;
@@ -581,7 +604,7 @@ impl Conexion {
             (Esquema::Ssl, Some(h)) => {
                 let esperada = analizar_huella(h)?;
                 (
-                    Flujo::Tls(conectar_pinado(&destino, esperada, espera)?),
+                    Flujo::Tls(conectar_pinado(&destino, proxy, esperada, espera)?),
                     Some(esperada),
                 )
             }
@@ -590,8 +613,14 @@ impl Conexion {
                     "la huella solo se comprueba con ssl://".into(),
                 ))
             }
-            (Esquema::Ssl, None) => (Flujo::Tls(conectar_tls_publico(&destino, espera)?), None),
-            (Esquema::Tcp, None) => (Flujo::Plano(conectar_tcp(&destino, espera)?), None),
+            (Esquema::Ssl, None) => (
+                Flujo::Tls(conectar_tls_publico(&destino, proxy, espera)?),
+                None,
+            ),
+            (Esquema::Tcp, None) => (
+                Flujo::Plano(conectar_transporte(&destino, proxy, espera)?),
+                None,
+            ),
         };
         // `RawClient::from` no negocia nada: la única negociación es la del motor, abajo.
         let conexion = Conexion {
@@ -737,10 +766,122 @@ fn instalar_proveedor() -> Arc<rustls::crypto::CryptoProvider> {
         .unwrap_or_else(|| Arc::new(rustls::crypto::aws_lc_rs::default_provider()))
 }
 
+/// `host:puerto` del proxy SOCKS5 (p. ej. Orbot en `127.0.0.1:9050`).
+fn analizar_proxy(p: &str) -> Result<(String, u16), Error> {
+    let (host, puerto) = p
+        .trim()
+        .rsplit_once(':')
+        .ok_or_else(|| Error::Red("proxy SOCKS5 sin puerto: usa host:puerto".into()))?;
+    let puerto: u16 = puerto
+        .parse()
+        .map_err(|_| Error::Red("puerto del proxy SOCKS5 inválido".into()))?;
+    let host = host.trim_matches(|c| c == '[' || c == ']');
+    if host.is_empty() {
+        return Err(Error::Red("proxy SOCKS5 sin host".into()));
+    }
+    Ok((host.to_string(), puerto))
+}
+
+/// Transporte TCP hasta el destino: directo, o a través del proxy SOCKS5 si se da uno. Un
+/// destino `.onion` sin proxy se rechaza AQUÍ, antes de abrir ningún socket ni resolver nada.
+fn conectar_transporte(
+    destino: &Destino,
+    proxy: Option<&str>,
+    espera: Duration,
+) -> Result<TcpStream, Error> {
+    let proxy = proxy.map(str::trim).filter(|p| !p.is_empty());
+    match proxy {
+        None if destino.es_onion() => Err(Error::Red(
+            "un servidor .onion solo se alcanza por un proxy SOCKS5 (Orbot): activa el proxy en los ajustes del nodo"
+                .into(),
+        )),
+        None => conectar_tcp(&destino.host, destino.puerto, espera),
+        Some(p) => {
+            let (ph, pp) = analizar_proxy(p)?;
+            let mut s = conectar_tcp(&ph, pp, espera)
+                .map_err(|e| Error::Red(format!("proxy SOCKS5 {ph}:{pp}: {e}")))?;
+            socks5_conectar(&mut s, &destino.host, destino.puerto)?;
+            Ok(s)
+        }
+    }
+}
+
+/// CONNECT de SOCKS5 (RFC 1928) sin autenticación. El nombre del destino viaja tal cual
+/// (ATYP 3) salvo que sea una IP literal: quien resuelve es el proxy, nunca este proceso.
+fn socks5_conectar(s: &mut TcpStream, host: &str, puerto: u16) -> Result<(), Error> {
+    fn err(m: impl std::fmt::Display) -> Error {
+        Error::Red(format!("proxy SOCKS5: {m}"))
+    }
+    s.write_all(&[0x05, 0x01, 0x00]).map_err(err)?;
+    let mut saludo = [0u8; 2];
+    s.read_exact(&mut saludo)
+        .map_err(|e| err(format!("sin respuesta al saludo: {e}")))?;
+    if saludo != [0x05, 0x00] {
+        return Err(err("el proxy no admite conexión sin autenticación"));
+    }
+    let mut peticion = vec![0x05, 0x01, 0x00];
+    match host.parse::<IpAddr>() {
+        Ok(IpAddr::V4(ip)) => {
+            peticion.push(0x01);
+            peticion.extend_from_slice(&ip.octets());
+        }
+        Ok(IpAddr::V6(ip)) => {
+            peticion.push(0x04);
+            peticion.extend_from_slice(&ip.octets());
+        }
+        Err(_) => {
+            if host.is_empty() || host.len() > 255 {
+                return Err(err("nombre de servidor vacío o demasiado largo"));
+            }
+            peticion.push(0x03);
+            peticion.push(host.len() as u8);
+            peticion.extend_from_slice(host.as_bytes());
+        }
+    }
+    peticion.extend_from_slice(&puerto.to_be_bytes());
+    s.write_all(&peticion).map_err(err)?;
+    let mut cab = [0u8; 4];
+    s.read_exact(&mut cab)
+        .map_err(|e| err(format!("sin respuesta a la conexión: {e}")))?;
+    if cab[0] != 0x05 {
+        return Err(err("la respuesta no es SOCKS5"));
+    }
+    if cab[1] != 0x00 {
+        let motivo = match cab[1] {
+            0x01 => "fallo general del proxy",
+            0x02 => "conexión no permitida por el proxy",
+            0x03 => "red inalcanzable",
+            0x04 => "servidor inalcanzable (¿la dirección es correcta y está en línea?)",
+            0x05 => "conexión rechazada por el servidor",
+            0x06 => "tiempo agotado",
+            0x07 => "orden no admitida por el proxy",
+            0x08 => "tipo de dirección no admitido por el proxy",
+            _ => "error desconocido",
+        };
+        return Err(err(format!(
+            "no pudo conectar con {host}:{puerto}: {motivo}"
+        )));
+    }
+    // Dirección ligada en la respuesta: se consume y se descarta.
+    let resto = match cab[3] {
+        0x01 => 4 + 2,
+        0x04 => 16 + 2,
+        0x03 => {
+            let mut l = [0u8; 1];
+            s.read_exact(&mut l).map_err(err)?;
+            l[0] as usize + 2
+        }
+        _ => return Err(err("tipo de dirección desconocido en la respuesta")),
+    };
+    let mut ligada = vec![0u8; resto];
+    s.read_exact(&mut ligada).map_err(err)?;
+    Ok(())
+}
+
 /// TCP con tiempo límite de conexión, lectura y escritura.
-fn conectar_tcp(destino: &Destino, espera: Duration) -> Result<TcpStream, Error> {
+fn conectar_tcp(host: &str, puerto: u16, espera: Duration) -> Result<TcpStream, Error> {
     use std::net::ToSocketAddrs;
-    let direccion = format!("{}:{}", destino.host, destino.puerto);
+    let direccion = format!("{host}:{puerto}");
     let mut ultimo = None;
     let mut flujo = None;
     for addr in direccion
@@ -779,8 +920,13 @@ fn raices_publicas() -> RootCertStore {
 }
 
 /// `ssl://` SIN huella: certificado validado contra las raíces públicas (CA, nombre y
-/// caducidad), como cualquier cliente TLS. Solo para el servidor público de signet.
-fn conectar_tls_publico(destino: &Destino, espera: Duration) -> Result<FlujoTls, Error> {
+/// caducidad), como cualquier cliente TLS (servidor público, o nodo propio con certificado de
+/// una CA reconocida).
+fn conectar_tls_publico(
+    destino: &Destino,
+    proxy: Option<&str>,
+    espera: Duration,
+) -> Result<FlujoTls, Error> {
     let proveedor = instalar_proveedor();
     let config = ClientConfig::builder_with_provider(proveedor)
         .with_safe_default_protocol_versions()
@@ -791,7 +937,7 @@ fn conectar_tls_publico(destino: &Destino, espera: Duration) -> Result<FlujoTls,
         .map_err(|_| Error::Red(format!("nombre de servidor inválido: {}", destino.host)))?;
     let sesion = ClientConnection::new(Arc::new(config), nombre)
         .map_err(|e| Error::Red(format!("tls: {e}")))?;
-    let mut flujo = StreamOwned::new(sesion, conectar_tcp(destino, espera)?);
+    let mut flujo = StreamOwned::new(sesion, conectar_transporte(destino, proxy, espera)?);
     // Forzar el apretón de manos ahora: un certificado no reconocido falla aquí, antes de
     // que viaje ningún dato de aplicación.
     while flujo.conn.is_handshaking() {
@@ -806,9 +952,22 @@ fn conectar_tls_publico(destino: &Destino, espera: Duration) -> Result<FlujoTls,
 /// TLS propio con la huella fijada: el apretón de manos falla si el SPKI no es el esperado.
 fn conectar_pinado(
     destino: &Destino,
+    proxy: Option<&str>,
     esperada: [u8; 32],
     espera: Duration,
 ) -> Result<FlujoTls, Error> {
+    conectar_observando(destino, proxy, Some(esperada), espera).map(|(f, _)| f)
+}
+
+/// Apretón de manos TLS con el verificador propio: con `esperada` fija la huella (falla si el
+/// SPKI no es el esperado); sin ella solo observa. Devuelve también el verificador, que guarda
+/// la huella vista.
+fn conectar_observando(
+    destino: &Destino,
+    proxy: Option<&str>,
+    esperada: Option<[u8; 32]>,
+    espera: Duration,
+) -> Result<(FlujoTls, Arc<VerificadorHuella>), Error> {
     let proveedor = instalar_proveedor();
     let verificador = Arc::new(VerificadorHuella {
         esperada,
@@ -825,7 +984,7 @@ fn conectar_pinado(
         .map_err(|_| Error::Red(format!("nombre de servidor inválido: {}", destino.host)))?;
     let sesion = ClientConnection::new(Arc::new(config), nombre)
         .map_err(|e| Error::Red(format!("tls: {e}")))?;
-    let mut flujo = StreamOwned::new(sesion, conectar_tcp(destino, espera)?);
+    let mut flujo = StreamOwned::new(sesion, conectar_transporte(destino, proxy, espera)?);
     // Forzar el apretón de manos ahora, para que una huella distinta falle aquí.
     while flujo.conn.is_handshaking() {
         if let Err(e) = flujo.conn.complete_io(&mut flujo.sock) {
@@ -834,15 +993,35 @@ fn conectar_pinado(
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .map(|v| v.to_lower_hex_string());
-            return Err(match vista {
-                Some(v) if v != esperada.to_lower_hex_string() => Error::HuellaServidor(format!(
-                    "el servidor presenta la huella {v}, no la esperada"
-                )),
+            return Err(match (vista, esperada) {
+                (Some(v), Some(esp)) if v != esp.to_lower_hex_string() => Error::HuellaServidor(
+                    format!("el servidor presenta la huella {v}, no la esperada"),
+                ),
                 _ => Error::Red(format!("tls: {e}")),
             });
         }
     }
-    Ok(flujo)
+    Ok((flujo, verificador))
+}
+
+/// Huella SPKI (SHA-256, hex en minúsculas) del certificado que presenta un servidor `ssl://`.
+/// Abre SOLO el apretón de manos TLS, sin validar el certificado (ni CA ni huella) y sin enviar
+/// ningún mensaje Electrum; cierra y devuelve la huella. Es para MOSTRARLA al usuario antes de
+/// que decida fijarla («certificado propio»): nada de lo que devuelve se acepta como válido por
+/// sí mismo. `proxy`: como en [`Conexion::abrir`].
+pub fn huella_servidor(servidor: &str, proxy: Option<&str>) -> Result<String, Error> {
+    let destino = Destino::analizar(servidor)?;
+    if destino.esquema != Esquema::Ssl {
+        return Err(Error::Red(
+            "la huella del certificado solo existe con ssl://".into(),
+        ));
+    }
+    let (flujo, verificador) = conectar_observando(&destino, proxy, None, crate::ESPERA_RED)?;
+    drop(flujo);
+    let vista = *verificador.vista.lock().unwrap_or_else(|p| p.into_inner());
+    vista
+        .map(|v| v.to_lower_hex_string())
+        .ok_or_else(|| Error::Red("el servidor no presentó certificado".into()))
 }
 
 #[cfg(test)]
@@ -856,17 +1035,25 @@ fn red_io(e: std::io::Error) -> Error {
 
 /// Sonda del nodo: abre una conexión como cualquier otra operación (las cuatro puertas, en el
 /// orden de la cabecera) e informa de lo que vio. `altura_minima`: la última altura que el
-/// móvil ya vio (0 si ninguna). No sincroniza nada.
+/// móvil ya vio (0 si ninguna). `proxy`: proxy SOCKS5, como en [`Conexion::abrir`]. No
+/// sincroniza nada.
 pub fn comprobar_nodo(
     red: Red,
     servidor: &str,
     huella: Option<&str>,
     altura_minima: u32,
+    proxy: Option<&str>,
 ) -> Result<NodoInfo, Error> {
     let red = red.permitida()?;
     let destino = Destino::analizar(servidor)?;
-    let (c, v) =
-        Conexion::abrir_validada(servidor, red.network(), huella, ESPERA_RED, altura_minima)?;
+    let (c, v) = Conexion::abrir_validada(
+        servidor,
+        red.network(),
+        huella,
+        ESPERA_RED,
+        altura_minima,
+        proxy,
+    )?;
     Ok(NodoInfo {
         servidor: servidor.to_string(),
         version_servidor: v.version_servidor,

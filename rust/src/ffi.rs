@@ -110,17 +110,30 @@ fn huella_opt(h: &Option<String>) -> Option<&str> {
     h.as_deref().map(str::trim).filter(|s| !s.is_empty())
 }
 
+/// Proxy SOCKS5 opcional (`host:puerto`): vacío o en blanco cuenta como ninguno.
+fn proxy_opt(p: &Option<String>) -> Option<&str> {
+    p.as_deref().map(str::trim).filter(|s| !s.is_empty())
+}
+
 /// Altura del servidor Electrum, verificando que es de la red indicada. `huella_spki`: la
 /// misma huella que en el resto de operaciones (obligatoria con nodo autofirmado).
 /// `altura_vista`: la última altura que la app ya vio (0 si ninguna); por debajo se rechaza.
+/// `proxy_socks5`: `host:puerto` del proxy (Tor/Orbot), obligatorio con un servidor `.onion`.
 #[uniffi::export]
 pub fn altura_red(
     red: Red,
     servidor: String,
     huella_spki: Option<String>,
     altura_vista: u32,
+    proxy_socks5: Option<String>,
 ) -> Result<u32, Error> {
-    motor::altura_red(red, &servidor, huella_opt(&huella_spki), altura_vista)
+    motor::altura_red(
+        red,
+        &servidor,
+        huella_opt(&huella_spki),
+        altura_vista,
+        proxy_opt(&proxy_socks5),
+    )
 }
 
 /// Comisión recomendada en sat/vB para confirmar en `bloques` bloques.
@@ -131,6 +144,7 @@ pub fn estimar_comision(
     bloques: u32,
     huella_spki: Option<String>,
     altura_vista: u32,
+    proxy_socks5: Option<String>,
 ) -> Result<f64, Error> {
     motor::estimar_comision(
         red,
@@ -138,6 +152,7 @@ pub fn estimar_comision(
         bloques as usize,
         huella_opt(&huella_spki),
         altura_vista,
+        proxy_opt(&proxy_socks5),
     )
 }
 
@@ -151,8 +166,23 @@ pub fn comprobar_nodo(
     servidor: String,
     huella_spki: Option<String>,
     altura_minima: u32,
+    proxy_socks5: Option<String>,
 ) -> Result<NodoInfo, Error> {
-    motor::comprobar_nodo(red, &servidor, huella_opt(&huella_spki), altura_minima)
+    motor::comprobar_nodo(
+        red,
+        &servidor,
+        huella_opt(&huella_spki),
+        altura_minima,
+        proxy_opt(&proxy_socks5),
+    )
+}
+
+/// Huella SPKI (hex) del certificado que presenta un servidor `ssl://`, SIN validarlo y sin
+/// hablar Electrum: solo para mostrársela al usuario antes de que decida fijarla
+/// («certificado propio»). Nada de lo que devuelve vale como comprobación por sí mismo.
+#[uniffi::export]
+pub fn huella_servidor(servidor: String, proxy_socks5: Option<String>) -> Result<String, Error> {
+    motor::huella_servidor(&servidor, proxy_opt(&proxy_socks5))
 }
 
 /// La billetera. Las llamadas se serializan con un mutex: una operación a la vez.
@@ -203,6 +233,12 @@ impl Billetera {
     /// Huella SPKI (hex) del certificado del servidor con `ssl://`; `null` = sin fijar.
     pub fn fijar_huella_servidor(&self, huella_spki: Option<String>) {
         self.con(|b| b.fijar_huella_servidor(huella_spki))
+    }
+
+    /// Proxy SOCKS5 `host:puerto` (Tor/Orbot) para todas las conexiones; `null` = directo.
+    /// Con un servidor `.onion` y sin proxy ninguna operación abre socket.
+    pub fn fijar_proxy_socks5(&self, proxy: Option<String>) {
+        self.con(|b| b.fijar_proxy(proxy))
     }
 
     pub fn nueva_direccion(&self) -> Result<DireccionInfo, Error> {

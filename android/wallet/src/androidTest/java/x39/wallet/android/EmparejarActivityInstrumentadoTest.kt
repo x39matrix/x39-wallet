@@ -14,6 +14,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import x39.wallet.NodoInfo
@@ -39,15 +40,18 @@ class EmparejarActivityInstrumentadoTest {
 
     @Before
     fun inicio() {
+        // Los paquetes de estas pruebas son de signet: en la edición mainnet quedan como «no aplicables».
+        assumeTrue("solo en la edición de prueba (signet); en mainnet no aplica", Redes.permitida(Red.SIGNET))
+        // Sin nodo ANTES de crear el repositorio: con el modo predeterminado (nodo X-39) NodeBridge
+        // arrancaría ya configurado y estas pruebas comprueban que no queda nada guardado.
+        Ajustes(ctx).apply { red = Red.SIGNET; borrarConfigNodo() }
         fake = FakeRepositorio(ctx)
-        fake.ajustes.red = Red.SIGNET
-        fake.ajustes.borrarConfigNodo()
         WalletRepository.fijarParaPruebas(fake)
     }
 
     @After
     fun fin() {
-        fake.ajustes.borrarConfigNodo()
+        if (::fake.isInitialized) fake.ajustes.borrarConfigNodo() // sin inicializar si la suposición de @Before no se cumplió
         WalletRepository.fijarParaPruebas(null)
     }
 

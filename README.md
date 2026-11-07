@@ -42,11 +42,24 @@ a paso, límites conocidos). Lo que ya está decidido y probado se recoge en `PR
   aparato admitida, un cambio de biometría no invalida la clave; la invalidación que se
   detecta cubre la pérdida o el reinicio del almacén de claves, y se recupera con las 12
   palabras sin borrar el estado de la billetera. Opción futura: ajuste «solo biometría».
+- **Selector de nodo** (Ajustes → Nodo): «Nodo X-39» (predeterminado: el servidor Electrum de
+  X-39, solo por el túnel de la app, sin escribir nada; sin túnel activo no se conecta por otra
+  vía) o «Mi nodo» (el servidor Electrum del usuario por `tcp://`, `ssl://` o `.onion` con proxy
+  SOCKS5). Un servidor solo se adopta tras comprobar que responde y que su `genesis_hash` es el de
+  la red de la billetera; si no, no se toca nada. Cambiar de servidor no borra nada: la cadena es
+  la misma y basta sincronizar. La app solo habla Electrum: no lleva ninguna otra dirección ni
+  puerto del nodo X-39.
 - **Nodo propio con huella**: la conexión TLS al nodo del usuario fija la CLAVE PÚBLICA de su
   certificado (huella SPKI, SHA-256 del `SubjectPublicKeyInfo`), no el certificado entero; con
   huella no se valida CA, ni nombre, ni caducidad. La huella viaja en todas las operaciones de
-  red. Sin huella, `ssl://` se valida contra las raíces públicas (solo tiene sentido con un
-  servidor público de certificado reconocido).
+  red. Sin huella, `ssl://` se valida contra las raíces públicas (certificado de una autoridad
+  reconocida, como cualquier cliente TLS). La huella se fija solo si el usuario activa
+  expresamente «certificado propio»: entonces el motor la lee del servidor (`huella_servidor`,
+  solo el apretón TLS, sin hablar Electrum), la app la muestra con aviso y la fija.
+- **Tor**: un servidor `.onion` exige un proxy SOCKS5 (Orbot, `127.0.0.1:9050` por defecto,
+  configurable, siempre como dirección IP y no como nombre); el motor pide CONNECT al proxy con el
+  nombre tal cual y nunca resuelve `.onion` por su cuenta; con proxy, este proceso no resuelve
+  ningún nombre (ni el del servidor ni el del proxy); sin proxy, ninguna operación abre socket.
 - **Emparejamiento con el nodo propio**: el nodo genera un paquete JSON (versión 1) con sus datos
   PÚBLICOS (red, servidor, huella SPKI, nombre, caducidad de 24 h y, opcionalmente, los datos
   públicos del túnel); el móvil lo importa por fichero o QR, lo valida entero (JSON estricto sin
