@@ -175,7 +175,7 @@ class NodeBridgeTest {
         for (l in registro) assertTrue(l, !l.contains("10.39.0.3") && !l.contains("50001") && !l.contains("tcp://"))
     }
 
-    /** G3 (c): detección «no concluyente» → UN intento (como hoy): nunca se bloquea por una duda. */
+    /** G3 (c): detección «no concluyente» (DESCONOCIDO) → CERO intentos en modo X-39: exige ruta verificada. */
     @Test
     fun g3c_deteccionNoConcluyente_unIntento_nuncaSeBloqueaPorUnaDuda() = runBlocking {
         val conexion = ConexionContada(caidaDeRed)
@@ -183,20 +183,22 @@ class NodeBridgeTest {
             diagnosticoTunel = DetectorFijo(noConcluyente), registrar = { })
         val cfg = NodoX39.config(Red.MAINNET)!!
         val e = nb.configurar(cfg) as EstadoNodo.Caido
-        assertEquals(1, conexion.intentos)
-        assertEquals(listOf(cfg.electrum), conexion.destinos)
+        assertEquals(0, conexion.intentos)
+        assertTrue(conexion.destinos.isEmpty())
         assertEquals(NodoX39.MENSAJE_TUNEL_DESCONOCIDO, e.ultimoError)
-        // Un detector que LANZA cuenta como no concluyente: se intenta igual.
+        // Un detector que LANZA cuenta como DESCONOCIDO y tampoco abre socket en modo X-39.
         val conexion2 = ConexionContada { info(9u, cifrado = false) }
         val nb2 = NodeBridgeImpl(Memoria(), CoroutineScope(Dispatchers.Unconfined), { false }, { }, conexion2, Dispatchers.Unconfined,
             diagnosticoTunel = { throw IllegalStateException("sin permiso") }, registrar = { })
-        assertTrue(nb2.probar(cfg).sano)
-        assertEquals(1, conexion2.intentos)
-        // Sin detector inyectado (valor por defecto) tampoco se bloquea.
+        val e2 = nb2.probar(cfg) as EstadoNodo.Caido
+        assertEquals(0, conexion2.intentos)
+        assertEquals(NodoX39.MENSAJE_TUNEL_DESCONOCIDO, e2.ultimoError)
+        // Sin detector inyectado (DESCONOCIDO por defecto) tampoco abre socket en modo X-39.
         val conexion3 = ConexionContada { info(9u, cifrado = false) }
         val nb3 = NodeBridgeImpl(Memoria(), CoroutineScope(Dispatchers.Unconfined), { false }, { }, conexion3, Dispatchers.Unconfined, registrar = { })
-        assertTrue(nb3.probar(cfg).sano)
-        assertEquals(1, conexion3.intentos)
+        val e3 = nb3.probar(cfg) as EstadoNodo.Caido
+        assertEquals(0, conexion3.intentos)
+        assertEquals(NodoX39.MENSAJE_TUNEL_DESCONOCIDO, e3.ultimoError)
         // Los tres textos del modo X-39 son distintos entre sí.
         val textos = listOf(sinVpn, conRuta, noConcluyente).map { d ->
             val c = ConexionContada(caidaDeRed)
@@ -257,7 +259,7 @@ class NodeBridgeTest {
                 val e = nb.configurar(cfg) as EstadoNodo.Caido
                 assertEquals("${ex.javaClass.simpleName} con ${d.estado}", esperado, e.ultimoError)
                 assertTrue(e.ultimoError, !e.ultimoError.contains("fallo interno") && !e.ultimoError.contains("203.0.113") && !e.ultimoError.contains("NullPointer"))
-                assertEquals(1, conexion.intentos)
+                assertEquals(if (d == conRuta) 1 else 0, conexion.intentos)
             }
         }
         // El detalle está en el registro, sin direcciones.

@@ -3,6 +3,7 @@ name = "x39-wallet"
 version = "0.2.0"
 edition = "2021"
 description = "Billetera Bitcoin de autocustodia (BIP39/BIP84, BDK, Electrum) — motor en Rust"
+license = "MIT OR Apache-2.0"
 publish = false
 
 [lib]

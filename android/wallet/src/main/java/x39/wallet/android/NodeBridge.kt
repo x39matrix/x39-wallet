@@ -572,9 +572,9 @@ class NodeBridgeImpl(
     private fun puertaTunel(c: ConfigNodo): EstadoNodo.Caido? {
         if (c.tunel != ModoTunel.X39) return null
         val d = diagnosticar()
-        if (d.estado != EstadoTunel.SIN_TUNEL) return null
-        registrar("X-39: túnel apagado, no se abre socket; diagnóstico del túnel: SIN_TUNEL (${sinDirecciones(d.detalle, c)})")
-        return EstadoNodo.Caido(0, NodoX39.MENSAJE_TUNEL, 0)
+        if (d.estado == EstadoTunel.CON_RUTA) return null
+        registrar("X-39: túnel apagado, no se abre socket; diagnóstico del túnel: ${d.estado} (${sinDirecciones(d.detalle, c)})")
+        return EstadoNodo.Caido(0, NodoX39.mensajeFallo(d.estado), 0)
     }
 
     /** Caída del nodo VIGENTE: anota desde cuándo (bajo el cerrojo). */

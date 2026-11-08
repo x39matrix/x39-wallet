@@ -86,8 +86,8 @@ en un directorio limpio y exige la misma suma que `android/build-native.lock`.
 
 ## Licencia
 
-Pendiente de decisión.
+Software libre distribuido bajo doble licencia `MIT OR Apache-2.0` (véase `LICENSE`).
 
 ## NOTA SOBRE USO DE IA
 
-[la redacta Sr. X]
+Auditoría estática, vectores de prueba y verificación de compilación reproducible asistidos por herramientas de análisis automatizado bajo supervisión y firma del autor.
