@@ -1,12 +1,14 @@
 # x39-wallet
 
 Billetera Bitcoin de autocustodia en dos partes: un motor en Rust (`rust/`) y, sobre él,
-un módulo Android (`android/`, en construcción) y una librería de conexión al nodo propio
-(`nodebridge/`, pendiente). Pensada para redes de prueba mientras madura: por defecto la
-API rechaza mainnet y solo una compilación con la feature `mainnet` la permite.
+un módulo Android (`android/wallet`) que se integra en la app de llamadas x39. La capa que
+valida y vigila el nodo (`NodeBridge`) vive dentro del módulo Android; su formato de
+emparejamiento está en `docs/nodebridge.md`. Por defecto la API rechaza mainnet y solo una
+compilación con la feature `mainnet` la permite; la biblioteca publicada se compila con ella.
 
-Este README se completará antes de publicar (tabla de madurez, compilación reproducible paso
-a paso, límites conocidos). Lo que ya está decidido y probado se recoge en `PRUEBAS.md`.
+Lo que está decidido y probado, con sus comandos y salidas, se recoge en `PRUEBAS.md`; la
+compilación reproducible, en `REPRODUCIBILITY.md`; cómo salen las direcciones y qué cruza
+hacia el nodo, en `docs/arbol-derivacion.html`.
 
 ## Qué hace el motor
 
@@ -87,7 +89,3 @@ en un directorio limpio y exige la misma suma que `android/build-native.lock`.
 ## Licencia
 
 Software libre distribuido bajo doble licencia `MIT OR Apache-2.0` (véase `LICENSE`).
-
-## NOTA SOBRE USO DE IA
-
-Auditoría estática, vectores de prueba y verificación de compilación reproducible asistidos por herramientas de análisis automatizado bajo supervisión y firma del autor.
