@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Árbol de derivación · billetera x39</title>
+<style>
+:root {
+  --fondo: #f3f2ef;
+  --panel: #ffffff;
+  --hundido: #eae8e3;
+  --tinta: #1a1b1e;
+  --tenue: #5a5d66;
+  --linea: #d6d3cc;
+  --sel: #1b56c4;
+  --sel-fondo: #e2ecff;
+  --nucleo-fondo: #ebe9e4;
+  --nucleo-borde: #84868e;
+  --pub-fondo: #e0f2ec;
+  --pub-borde: #17705a;
+  --aviso: #8a4b00;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
+  --texto: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fondo: #131416;
+    --panel: #1c1e22;
+    --hundido: #25272c;
+    --tinta: #ebe9e4;
+    --tenue: #a4a7b0;
+    --linea: #34373e;
+    --sel: #8db5ff;
+    --sel-fondo: #1a2a47;
+    --nucleo-fondo: #26282d;
+    --nucleo-borde: #80838c;
+    --pub-fondo: #132e27;
+    --pub-borde: #5fc7aa;
+    --aviso: #f0b45e;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--fondo);
+  color: var(--tinta);
+  font: 16px/1.55 var(--texto);
+}
+.hoja { max-width: 940px; margin: 0 auto; padding: 16px 16px 48px; }
+h1 { font-size: clamp(1.45rem, 4.5vw, 2rem); line-height: 1.2; margin: 0 0 6px; font-weight: 650; letter-spacing: -0.01em; text-wrap: balance; }
+h2 { font-size: 1.2rem; line-height: 1.3; margin: 0 0 10px; font-weight: 650; }
+h3 { font-size: 1rem; margin: 0 0 6px; font-weight: 650; }
+p { margin: 0 0 12px; }
+code, .mono { font-family: var(--mono); font-size: 0.92em; }
+code { background: var(--hundido); padding: 1px 5px; border-radius: 5px; overflow-wrap: anywhere; }
+.tenue { color: var(--tenue); }
+.pequeno { font-size: 0.875rem; }
+section { margin-top: 36px; }
+
+/* Cabecera */
+.cab { background: var(--panel); border: 1px solid var(--linea); border-radius: 22px; padding: 22px 20px 20px; }
+.cab .sub { color: var(--tenue); max-width: 64ch; }
+.pestanas { display: inline-flex; gap: 6px; margin: 10px 0 14px; flex-wrap: wrap; }
+.pestanas button, .paso button, .nodo {
+  font: inherit; color: inherit; cursor: pointer;
+}
+.pestanas button {
+  background: transparent; border: 1.5px solid transparent; border-radius: 999px;
+  padding: 8px 18px; min-height: 44px; font-weight: 600;
+}
+.pestanas button[aria-selected="true"] { background: var(--sel-fondo); border-color: var(--sel); color: var(--sel); }
+.activa { background: var(--hundido); border-radius: 16px; padding: 14px 16px; display: grid; grid-template-columns: auto 1fr; gap: 14px 28px; }
+.activa .rotulo { font-size: 0.8125rem; color: var(--tenue); margin-bottom: 2px; }
+.activa .valor { font-family: var(--mono); font-size: 1.02rem; overflow-wrap: anywhere; }
+.activa .dir { text-align: right; }
+@media (max-width: 640px) {
+  .activa { grid-template-columns: 1fr; }
+  .activa .dir { text-align: left; }
+}
+
+/* Flujo */
+.paso { display: flex; align-items: center; gap: 12px; margin: 12px 0 20px; }
+.paso button {
+  background: var(--panel); border: 1px solid var(--linea); border-radius: 999px;
+  padding: 8px 18px; min-height: 44px;
+}
+.paso button:disabled { opacity: 0.45; cursor: default; }
+.paso .cuenta { font-family: var(--mono); min-width: 5ch; text-align: center; }
+.flujo { list-style: none; margin: 0; padding: 0 0 0 0; display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px 30px; }
+.flujo li { position: relative; display: flex; }
+.flujo li + li::before {
+  content: "\2192"; position: absolute; left: -23px; top: 50%; transform: translateY(-50%);
+  color: var(--tenue); font-size: 1.05rem;
+}
+.nodo {
+  flex: 1; text-align: center; border-radius: 26px; padding: 12px 10px; min-height: 96px;
+  background: var(--nucleo-fondo); border: 1.5px solid var(--nucleo-borde);
+  display: flex; flex-direction: column; justify-content: center; gap: 2px;
+}
+.nodo.pub { background: var(--pub-fondo); border: 1.5px dashed var(--pub-borde); }
+.nodo[aria-current="step"] { background: var(--sel-fondo); border: 2.5px solid var(--sel); }
+.nodo .t { font-weight: 650; line-height: 1.25; }
+.nodo .m { font-family: var(--mono); font-size: 0.8125rem; overflow-wrap: anywhere; }
+.nodo .s { font-size: 0.8125rem; color: var(--tenue); }
+@media (max-width: 880px) {
+  .flujo { grid-template-columns: repeat(3, 1fr); padding-left: 26px; }
+  .flujo li:nth-child(4)::before { content: "\21B3"; }
+}
+@media (max-width: 560px) {
+  .flujo { grid-template-columns: 1fr; gap: 30px; padding-left: 0; }
+  .flujo li + li::before, .flujo li:nth-child(4)::before { content: "\2193"; left: 50%; top: -27px; transform: translateX(-50%); }
+  .nodo { min-height: 0; }
+}
+.leyenda { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 18px 0 0; padding: 14px 0 0; border-top: 1px solid var(--linea); font-size: 0.875rem; color: var(--tenue); }
+.leyenda span { display: inline-flex; align-items: center; gap: 8px; }
+.leyenda i { width: 26px; height: 14px; border-radius: 7px; display: inline-block; flex: none; }
+.leyenda .l-sel { background: var(--sel-fondo); border: 2px solid var(--sel); }
+.leyenda .l-nuc { background: var(--nucleo-fondo); border: 1.5px solid var(--nucleo-borde); }
+.leyenda .l-pub { background: var(--pub-fondo); border: 1.5px dashed var(--pub-borde); }
+
+.detalle { margin-top: 26px; }
+.frontera { display: inline-block; font-family: var(--mono); font-size: 0.875rem; background: var(--hundido); border-radius: 12px; padding: 6px 12px; margin: 0 0 12px; border-left: 4px solid var(--nucleo-borde); }
+.frontera.pub { border-left-color: var(--pub-borde); }
+.detalle .desc { max-width: 72ch; }
+.tres { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 14px; }
+.tarjeta { background: var(--panel); border: 1px solid var(--linea); border-radius: 16px; padding: 14px 16px; }
+.tarjeta .rotulo { font-size: 0.8125rem; color: var(--tenue); margin-bottom: 4px; }
+.tarjeta .dato { font-family: var(--mono); font-size: 0.9rem; overflow-wrap: anywhere; }
+@media (max-width: 720px) { .tres { grid-template-columns: 1fr; } }
+
+/* Deslizadores */
+.mandos { display: grid; grid-template-columns: 1fr 1fr; gap: 20px 32px; }
+@media (max-width: 720px) { .mandos { grid-template-columns: 1fr; } }
+.mando .fila { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+.mando label { font-weight: 600; }
+.mando input[type="number"], .lote input[type="number"] {
+  font: inherit; font-family: var(--mono); color: inherit; background: var(--panel);
+  border: 1px solid var(--linea); border-radius: 12px; padding: 8px 10px; width: 6.5em; min-height: 44px; text-align: center;
+}
+.mando input[type="range"] { width: 100%; min-height: 32px; accent-color: var(--sel); }
+
+/* Lote */
+.lote .fila { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-bottom: 14px; }
+.lote .fila input[type="number"] { width: 9em; }
+.dos { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 720px) { .dos { grid-template-columns: 1fr; } }
+.columna { background: var(--panel); border: 1px solid var(--linea); border-radius: 18px; padding: 16px; }
+.columna h3 { margin-bottom: 12px; }
+.metrica { padding: 10px 0; border-top: 1px solid var(--linea); }
+.metrica .rotulo { font-size: 0.8125rem; color: var(--tenue); }
+.metrica .cifra { font-size: 1.5rem; font-weight: 650; line-height: 1.25; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.metrica .desglose { font-family: var(--mono); font-size: 0.8125rem; color: var(--tenue); overflow-wrap: anywhere; }
+
+/* Frontera */
+.listas { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 720px) { .listas { grid-template-columns: 1fr; } }
+.listas ul { margin: 0; padding-left: 1.15em; }
+.listas li { margin-bottom: 7px; }
+.columna.nuc { border-left: 4px solid var(--nucleo-borde); }
+.columna.pub { border-left: 4px solid var(--pub-borde); }
+.limite { border-left: 4px solid var(--aviso); background: var(--panel); border-radius: 12px; padding: 12px 16px; margin-top: 14px; }
+.prosa p { max-width: 74ch; }
+
+footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--linea); color: var(--tenue); font-size: 0.875rem; }
+footer pre { font-family: var(--mono); font-size: 0.8125rem; background: var(--hundido); color: var(--tinta); border-radius: 10px; padding: 10px 12px; overflow-x: auto; margin: 6px 0 12px; }
+:focus-visible { outline: 3px solid var(--sel); outline-offset: 2px; }
+@media (prefers-reduced-motion: no-preference) {
+  .nodo, .pestanas button { transition: background-color 0.15s, border-color 0.15s; }
+}
+</style>
+</head>
+<body>
+<div class="hoja">
+
+<header class="cab">
+  <h1>Árbol de derivación de la billetera x39</h1>
+  <p class="sub">Cómo salen las direcciones de una sola frase (BIP-39 → BIP-32 → BIP-84) y qué parte del trabajo se queda en el núcleo Rust y cuál llega al nodo. Todos los valores son del vector de prueba público de BIP-84, no de una billetera real.</p>
+
+  <div class="pestanas" role="tablist" aria-label="Rama de la ruta">
+    <button type="button" role="tab" id="tab0" aria-selected="true" data-rama="0">Recepción (0)</button>
+    <button type="button" role="tab" id="tab1" aria-selected="false" data-rama="1">Cambio (1)</button>
+  </div>
+
+  <div class="activa" aria-live="polite">
+    <div>
+      <div class="rotulo">Ruta BIP-84 activa (SegWit nativo, P2WPKH)</div>
+      <div class="valor" id="ruta">m/84'/0'/0'/0/0</div>
+    </div>
+    <div class="dir">
+      <div class="rotulo">Dirección bech32 derivada · huella del maestro</div>
+      <div class="valor" id="direccion">…</div>
+    </div>
+  </div>
+</header>
+
+<noscript><p class="limite">Esta página necesita JavaScript (va todo dentro del propio fichero; no se carga nada de fuera).</p></noscript>
+
+<section aria-labelledby="t-flujo">
+  <h2 id="t-flujo">De la frase a la dirección, en cinco etapas</h2>
+  <p class="tenue">Elija una etapa para ver su operación y de qué lado de la frontera queda.</p>
+
+  <div class="paso">
+    <button type="button" id="anterior">Anterior</button>
+    <span class="cuenta" id="cuenta" aria-live="polite">1 / 5</span>
+    <button type="button" id="siguiente">Siguiente</button>
+  </div>
+
+  <ol class="flujo" id="flujo"></ol>
+
+  <div class="leyenda">
+    <span><i class="l-sel"></i>Etapa seleccionada</span>
+    <span><i class="l-nuc"></i><span>Núcleo Rust (<span class="mono">libx39wallet.so</span>)</span></span>
+    <span><i class="l-pub"></i>NodeBridge · lado público</span>
+  </div>
+
+  <article class="detalle" id="detalle" aria-live="polite">
+    <h3 id="d-titulo"></h3>
+    <div class="frontera" id="d-frontera"></div>
+    <p class="desc" id="d-desc"></p>
+    <div class="tres">
+      <div class="tarjeta"><div class="rotulo">Operación</div><div class="dato" id="d-op"></div></div>
+      <div class="tarjeta"><div class="rotulo">Entrada</div><div class="dato" id="d-en"></div></div>
+      <div class="tarjeta"><div class="rotulo">Salida</div><div class="dato" id="d-sa"></div></div>
+    </div>
+  </article>
+</section>
+
+<section aria-labelledby="t-mandos">
+  <h2 id="t-mandos">Recorrer el árbol</h2>
+  <div class="mandos">
+    <div class="mando">
+      <div class="fila">
+        <label for="nCuenta">Cuenta (<i>cuenta'</i>)</label>
+        <input type="number" id="nCuenta" min="0" step="1" value="0" inputmode="numeric" aria-describedby="nota-mandos">
+      </div>
+      <input type="range" id="rCuenta" min="0" max="3" step="1" value="0" aria-label="Cuenta, de 0 a 3">
+    </div>
+    <div class="mando">
+      <div class="fila">
+        <label for="nIndice">Índice de dirección (<i>índice</i>)</label>
+        <input type="number" id="nIndice" min="0" step="1" value="0" inputmode="numeric" aria-describedby="nota-mandos">
+      </div>
+      <input type="range" id="rIndice" min="0" max="19" step="1" value="0" aria-label="Índice, de 0 a 19">
+    </div>
+  </div>
+  <p class="tenue pequeno" id="nota-mandos" style="margin-top:12px">La billetera x39 usa solo la cuenta 0' (sus dos descriptores son <code>…/84'/moneda'/0'/0/*</code> y <code>…/84'/moneda'/0'/1/*</code>); las cuentas 1' a 3' están aquí para recorrer el árbol. La tabla embebida cubre cuenta' 0–3 e índice 0–19: fuera de ese rango la página responde «no precalculado».</p>
+</section>
+
+<section class="lote" aria-labelledby="t-lote">
+  <h2 id="t-lote">Modo de generación masiva: una semilla frente a N semillas</h2>
+  <p class="tenue">Comparación de cálculo, no una función de la billetera: la app revela las direcciones de una en una. N = 4.000 es un ejemplo; en el repositorio no hay ninguna prueba con esa cifra.</p>
+  <div class="fila">
+    <label for="nLote"><b>N</b> (direcciones)</label>
+    <input type="number" id="nLote" min="1" max="1000000" step="1" value="4000" inputmode="numeric">
+    <span class="tenue pequeno" id="nLoteNota">ejemplo de cálculo</span>
+  </div>
+  <div class="dos">
+    <div class="columna">
+      <h3 id="h-hd">Una semilla → N direcciones (BIP-32)</h3>
+      <div class="metrica"><div class="rotulo">HMAC-SHA512 totales</div><div class="cifra" id="hd-total"></div><div class="desglose" id="hd-desglose"></div></div>
+      <div class="metrica"><div class="rotulo">Copias de seguridad necesarias</div><div class="cifra" id="hd-copias"></div><div class="desglose" id="hd-copias-d"></div></div>
+      <div class="metrica"><div class="rotulo">HMAC-SHA512 por dirección adicional</div><div class="cifra" id="hd-extra"></div><div class="desglose">una derivación hija normal</div></div>
+    </div>
+    <div class="columna">
+      <h3 id="h-in">N semillas independientes (BIP-39)</h3>
+      <div class="metrica"><div class="rotulo">HMAC-SHA512 totales</div><div class="cifra" id="in-total"></div><div class="desglose" id="in-desglose"></div></div>
+      <div class="metrica"><div class="rotulo">Copias de seguridad necesarias</div><div class="cifra" id="in-copias"></div><div class="desglose" id="in-copias-d"></div></div>
+      <div class="metrica"><div class="rotulo">HMAC-SHA512 por dirección adicional</div><div class="cifra" id="in-extra"></div><div class="desglose" id="in-extra-d"></div></div>
+    </div>
+  </div>
+  <p class="tenue pequeno" style="margin-top:12px">Solo se cuentan las llamadas a HMAC-SHA512, tomadas de los niveles de la ruta <span class="mono">m/84'/0'/cuenta'/rama/índice</span>. La multiplicación de curva (P = k·G), el HASH160 y la codificación bech32 se hacen una vez por dirección en los dos casos y no entran en la cuenta.</p>
+</section>
+
+<section class="prosa" aria-labelledby="t-frontera">
+  <h2 id="t-frontera">Qué cruza la frontera y qué no</h2>
+  <div class="listas">
+    <div class="columna nuc">
+      <h3>No sale del aparato</h3>
+      <ul>
+        <li><b>La frase.</b> En disco está cifrada (AES-256-GCM) con una clave de Android Keystore que pide autenticación del usuario en cada uso; la clave se crea en StrongBox si el aparato lo tiene y, si no, en el Keystore sin StrongBox. El fichero queda fuera de las copias de seguridad del sistema.</li>
+        <li><b>Su paso al motor.</b> Entra como bytes en un búfer directo, nunca como texto, y se pone a cero al terminar la llamada.</li>
+        <li><b>Las claves privadas.</b> No se guardan: se derivan de la frase en el momento de firmar y se sueltan después. El fichero de estado solo contiene los descriptores públicos.</li>
+        <li><b>La firma.</b> <code>firmar_y_extraer</code> vuelve a comprobar en Rust que lo que firma es lo que se revisó. El PSBT crudo no cruza a Kotlin: solo su revisión y su identificador.</li>
+      </ul>
+    </div>
+    <div class="columna pub">
+      <h3>Llega al nodo</h3>
+      <ul>
+        <li><b>Los script hash de las direcciones</b>, para pedir su historial, y los identificadores de las transacciones de ese historial.</li>
+        <li><b>Consultas de cadena:</b> versión del protocolo, génesis, cabeceras, altura y pruebas de inclusión.</li>
+        <li><b>La estimación de comisión.</b></li>
+        <li><b>La transacción ya firmada</b>, al difundirla.</li>
+      </ul>
+      <p class="tenue pequeno" style="margin:10px 0 0">El motor no pide al nodo ni saldo ni lista de UTXO: los calcula en local a partir del historial.</p>
+    </div>
+  </div>
+
+  <p style="margin-top:16px"><b>El puente Android ↔ Rust</b> es UniFFI (versión fijada 0.32.2): los enlaces Kotlin se generan de la misma compilación que la biblioteca y la cargan con JNA. Cruzan tipos planos —números, textos, listas y registros—, no JSON.</p>
+  <p><b><code>NodeBridge</code></b> es una clase Kotlin que no transporta datos de la billetera: valida la dirección del nodo, llama a la comprobación del motor (identidad TLS, protocolo Electrum 1.4, red por génesis y altura no inferior a la ya vista), vigila el nodo con reintentos de espera creciente, pone los errores en lenguaje llano y quita las direcciones del registro. La conexión Electrum la abre el propio motor (<code>rust/src/nodo.rs</code>), dentro de la misma biblioteca.</p>
+  <p><b>Dos modos de nodo.</b> «Nodo x39 por el túnel» es el predeterminado: si el túnel no está activo, la billetera no se conecta por otra vía. «Mi nodo» admite <code>tcp://</code>, <code>ssl://</code> (certificado público, o «certificado propio» con huella fijada) y un servidor <code>.onion</code> a través de un proxy SOCKS5. El camino <code>.onion</code> está probado con un proxy de prueba; con Orbot en un móvil figura como pendiente en <code>PRUEBAS.md</code>.</p>
+  <p class="limite"><b>Límite.</b> El nodo al que se conecta la billetera ve sus direcciones. Con el nodo x39 por el túnel las ve ese nodo; con «Mi nodo» las ve el del usuario y nadie más. Con <code>tcp://</code> fuera de un túnel la conexión va sin cifrar, y la app lo avisa.</p>
+</section>
+
+<footer>
+  <p><b>De dónde salen los datos.</b> Las 160 direcciones y la huella del maestro se derivaron del vector de prueba público de BIP-84 («abandon» ×11 + «about», passphrase vacía) con las versiones que fija <code>rust/Cargo.lock</code>: <span id="versiones">bitcoin y bip39</span>. Antes de escribir la tabla, el programa comprueba las tres direcciones publicadas en el propio BIP-84.</p>
+  <p style="margin-bottom:0">Para regenerarla, desde la raíz del repositorio:</p>
+  <pre>cargo run --release --manifest-path herramientas/arbol-derivacion/Cargo.toml &gt; tabla.json</pre>
+  <p>Referencias (texto, no se carga nada): BIP-39, BIP-32 y BIP-84, en github.com/bitcoin/bips. Fuentes en el repositorio: <code>rust/src/lib.rs</code>, <code>rust/src/ffi.rs</code>, <code>rust/src/nodo.rs</code>, <code>android/wallet/…/NodeBridge.kt</code>, <code>AlmacenSemilla.kt</code>.</p>
+</footer>
+
+</div>
+
+<script type="application/json" id="tabla">{"origen":"vector de prueba BIP-84","bitcoin":"0.32.102","bip39":"2.2.2","huella":"73c5da0a","moneda":0,"cuentas":4,"ramas":2,"indices":20,"dir":[[["bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu","bc1qnjg0jd8228aq7egyzacy8cys3knf9xvrerkf9g","bc1qp59yckz4ae5c4efgw2s5wfyvrz0ala7rgvuz8z","bc1qgl5vlg0zdl7yvprgxj9fevsc6q6x5dmcyk3cn3","bc1qm97vqzgj934vnaq9s53ynkyf9dgr05rargr04n","bc1qnpzzqjzet8gd5gl8l6gzhuc4s9xv0djt0rlu7a","bc1qtet8q6cd5vqm0zjfcfm8mfsydju0a29ggqrmu9","bc1qhxgzmkmwvrlwvlfn4qe57lx2qdfg8phycnsarn","bc1qncdts3qm2guw3hjstun7dd6t3689qg4230jh2n","bc1qgswpjzsqgrm2qkfkf9kzqpw6642ptrgzapvh9y","bc1qd30z5a5e50jtgx28rvt64483tq65r9pkj623wh","bc1qxr4fjkvnxjqphuyaw5a08za9g6qqh65t8qwgum","bc1q8txvqq8kr0nhkatkrmeg7zaj45zpsef2ylc9pq","bc1qgr7f3jfuzhpe45h3dnqxxjr3ml0de4ad2w3ysd","bc1q4fxs7lhw70m7nn7u6hqsa0glyt045ls5vdl6hs","bc1qgtus5u58avcs5ehpqvcllv5f66dneznw3upy2v","bc1q7kv2wwzgh2zej88ywrjvnpvmqy2emefc8ar3za","bc1qrz46a4gt0sghvvyt4gy5kp2rswmhtufv6sdq9v","bc1qf60uv69k0prrdxkpmh94u9cwmkpkl0t0r02hgh","bc1q27yd7vz8m5kz230wuyncfe3pyazez6ah58yzy0"],["bc1q8c6fshw2dlwun7ekn9qwf37cu2rn755upcp6el","bc1qggnasd834t54yulsep6fta8lpjekv4zj6gv5rf","bc1qn8alfh45rlsj44pcdt0f2cadtztgnz4gq3h3uf","bc1qv6vaedpeke2lxr3q0wek8dd7nzhut9w0eqkz9z","bc1qetrkzfslk0d4kqjnu29fdh04tkav9vj3k36vuh","bc1qu3936zt3c42xdz94752q07jg8656gfeh3agj6j","bc1qlxcpfk4f2h3v8m3vpfewpz7a95l24wq5wavz6j","bc1qschdw5sgdyyamnwgphy5yand4kdemhaj05tjl3","bc1qzlxde5yq9lgpf2szqtgx3hgmtg4wlkplz00f52","bc1qwmrhe0ry500ptrhfwcvntglk8y0affaauvcp46","bc1qjgpsrnh45alwg8s5257qsf382ftflgkt524fc0","bc1q6j7mrxrc83v26axwc4c7xuylf6mx9kdeljlmp2","bc1q6z5ez2gjuj8xe9jr86u3w3dk086fhgznrx3pzr","bc1q9dnujves0jygscwr5fknqwd6lcsq27mt4d78j9","bc1q62h3h7kpgyn5r5x6wl8tnt2mxad9qw08kkr6su","bc1q3u7mahn3a9mvl5f4wahqhnr77tygpelyhdxqec","bc1q64traftpkyg7wc7egks3ktq3mfvqfajcr8q70y","bc1q8p7zxw75vgv536k3u56f2j0yxlxgfgpe689ph0","bc1qr6z9va0798efd6q7q3nhd698twrp3c0v4u0nl5","bc1q5w6rj60jh35g859xfq4harfxf6ta3mq6nxekfl"]],[["bc1qku0qh0mc00y8tk0n65x2tqw4trlspak0fnjmfz","bc1qx0tpa0ctsy5v8xewdkpf69hhtz5cw0rf5uvyj6","bc1qtyhvpd5mlhuvcwhsy976ayq2ewa9pa6ljgt7z5","bc1qkgq9enypv0vm7fxmfxd8yfz95vtsuwkm5mpr90","bc1qr09satsldcqr08e2pclrlnx2edu7w4308ccmdl","bc1q2lw3ne8d4r57pdr8x89lf7k4vv73qe98vk4evf","bc1qltfh8lgjm8suax5qxmmgkklejv9z7cttnalutp","bc1qgm4dqwsg5c648a0jvsw6gkwtjx5yah8cspkv9t","bc1qxmt2xvluh32w60qjqq82kacsjcdqnxxpw8t2ys","bc1q2xm726yx34zyytudu6529nepqyfx9eca6s6s3e","bc1qjpxknl832p0g537cqp8hjcrm3y55eyg8wm54th","bc1qzwvnhul3yej2eg6gxzh0ew42c8upy3mnxdtksj","bc1qckhcr0shkrfs9zztv8jrppl3n0fasjr8z8nry6","bc1ql3nmzhm9gh0ak28n70pq9x4p60kxu05m6dsd3n","bc1qqp9ag7eq54ys4eae98phmdtu8qkcy93qqrm57l","bc1qhyn5ufu66m4vlc69783yz2jc5c0gvtqxpy6v70","bc1qk3ck50l2aj2ldvlagjjw8xrrfzgle5tuzeph6x","bc1q0gqxpfq4v77fvpd7rvsqtsdapcuawtx5rr7kr3","bc1q3dc6gmkulyuhl3362myy3xfh47kzegy0v328l5","bc1qq69g89jmt574cfldkslnvuudsk4slute0rc7s9"],["bc1qt0x83f5vmnapgl2gjj9r3d67rcghvjaqrvgpck","bc1qa7mufelw8xtut05n0pt8cn7dwfy99lhwxp93yf","bc1q5zg8q73m6mdqnra9ut8taan3derlhgjmt0lev8","bc1q2zk22fcn0mxwhn70gr2rhnhdmallg4cg6fntdw","bc1quj9q7jm4sxng8qdgc0ayq9qslaynyx93ay5k7p","bc1q9gfpddf0jdq6znmjg95djk6qgrse4qevfdz29y","bc1qk2eztmqny83x9m4tyuwxr4xsjh6829gru5sml6","bc1qfcepqd652nmfrkf8e4pldfd6nzpwqtywran6dx","bc1q2d99qjrms70lfhxwrdrfvvm26uty2d0xx47rfu","bc1q8www82nr7zueqmkgyxntm88xd0k6nc364snfmf","bc1qjk8pdv6rj6vce7ylqj4hhqx8r40j42qysnawm8","bc1qarhav7r7fuvqv87ayfgz5ejh3zy34gxxlm539a","bc1q03ykgwxx4fppl3072ygl40g68pfuh3vra6qlpz","bc1qnr0gmuzd5q9pgmg4hgwkns2he2qscpm0nrc4ev","bc1q7g9wut43cwxrs8csd7ysn4fsl2dmffkpquegfm","bc1q7ewu89nspfc5rmnrkserx5jgcya78cgsulw9pd","bc1q9l4kk6tkud5342p8nqv4xxmcummmht8ltm980x","bc1qf3t6ds7ll2q5uwsmwj6cphyrn697xxwkckwky3","bc1qkfkhr6cheqag5tm7rfrs0xue3ej7uu6a86v8e7","bc1q7ujmrjzvlrs8yzl2alp3su4rtt0e6k2zdctum9"]],[["bc1qkljqd65ax6mdpyzm9c2r8scg8euymkfqauukae","bc1qagqxq3sk9qlm393zh3qax32w5jq5jc423tqajn","bc1qex9xwhzgaa95lktxp22dtgvegn2m38vw83frz8","bc1qzdl22z6yd4wx92k043hy2uaa9jrtctlhm8nd4w","bc1qk2guupqdxq7tztlage84nm9yx7elak647fmq8d","bc1ql774upt5yseuqhaffxlgvxuyr2xlps8v87f2ts","bc1qp9n8anctaqkhp2yydyykxr6pveeutj3nlsnwjy","bc1qxlh2lsjhmkxytkhg966uz55nx42x69ge2k0453","bc1qq7a0tssdws2yncge4agjzfx8n2rjhqfvv7smf7","bc1qpww640dz05ech25s9ry8755sgg7zn4wd58axdj","bc1q3hgt3s6y07hasq4e66rrcfgsttwx7pnku20lvj","bc1q9a44l4pwywe8vs579pn2pyekmln4n8rk657xwk","bc1qpnddmdeynzve4dfahkcx5eqrquaqek2qh36crc","bc1qwh6zfzh4xad9vsrkva3wy8epnvy4t2hr3cttv7","bc1qtk3swgcu6g0wu34swgwupdqe3268leyu0gzxn0","bc1qrevpv3zkf8kkt7s724psvu28pxap3qe05f8lyu","bc1qu9s9dr5ztnq5dr0jkydv3m746y996eu4phejy3","bc1qg2s4ayry94fr42h36qw7pedu9ds90de556uvhz","bc1qf4he2upr94352tzf59vc2y8lhuncpfnz3qh9nh","bc1qmcgsk7zr3fmpltjvjq5gmv7t8ucyqnm2naeg80"],["bc1q8nfzpmhhsuchpjdcuv7tyy5f95kwp0vudgmgwx","bc1qt6lv6kg6uww7p63qj507zgvh39a8hjl48r7z4g","bc1qvafqsr50vfcqcx7srfz6lyyamge05kg0vulduk","bc1qketehmxm8e7tpattpmsnn37zlh4fjtgg57wv46","bc1qcq2nud3ke6y5yfmg4qr9az0g2jtj87qc4krq64","bc1qtg5eghwfymf7ayt4pyvwrh3ezegg94tvslwzm5","bc1q75juh327ex87zue3q5zsva7hgd65l79lkpgs8l","bc1qk25senelucp2c8ejm8lyx6l3xfrmfltx0z9gp7","bc1ql99pafc22dtg60y3dtu0qk7r368qnwnrx9fesh","bc1qxdmnvp7sujr9agl5czsqfz822w2mcjgfjgqn65","bc1qxfnnwdhqyhcn0pj62w0xavfqjv54hcvr2xfjf6","bc1qdzga6nrn284xk83kxzzxmwvgy6e574syshwtht","bc1qpe5jd7rczy6vuhfcqgwg6cjw2ht6hfqkmlds8c","bc1q0uljctlmy0gnektfyx64sekcjk6e7hjyywntsj","bc1qx6wa0flcalz9ap27tkxyxerrx60kzytnddvsz9","bc1q5kkla0stdrd0etz986w052mu5e5x4q5ah0rpmt","bc1qx9l7vy4ym0940esl4f6zs5ghc4jln433eh73wu","bc1qynvvjfhaajnyw6rx44hspadch8yjfgq3t3ydm5","bc1qstc6sa9n09ha6jjqghech9lzxdxkjhraajejsr","bc1q4du7e3vw34vsflf76xf9h8gktms9wzqcl7vlh5"]],[["bc1qzycgs5zetsgk7y664m5y9u2ak7zfxykxmr628r","bc1qacx6mafz86g08n9n9r2uw6282dznvpe8ngs06c","bc1qu2pcytq889cpmcdt03lq5je6vgnk9uzf0f3emd","bc1qay0deyu6jm2uur9yuja6vcrrg6v3h8v4xff0gk","bc1q2n8chg4jshx0z4kav99q5uhx36fx0tqel790nq","bc1q3ekaj6zf5ede6crxzk7mu2mg595lxscpt2qe6c","bc1qn9sh9xp97qdfg54ysmj6ff8t32pqus2emhtjvy","bc1qra97rrlu5ffuks3wdykq0wfwpa4dfwenteraez","bc1q8s5zxvfsvus5f64pf5zcrh3xpvw7qu8zv43y7r","bc1qjahc6eylhjtz5emgpfnrtanzms8qdspnsf6l45","bc1qpeurvw00sklfsmvfqd2hn2mwsq47g7shrpewzg","bc1qm3k5weat55cy8jy0wk76wrmfajqg0fc8jphhf7","bc1ql9twpdwvzunf9u2uk4arv7tsafr4v2338deh7m","bc1qmu0r55fxhyphvr5nlc3pc6le9uqfjp8kj7rf2t","bc1q89njpynhmc75lgfanths0emey6w4rrk4fn56nh","bc1qsg56yw7s729rv63t0zxdppu8ra0a7elphta3zz","bc1q4z2dgn042f4hhs3hqmrr49m8jg2rdz76462p09","bc1qnn8q4u62tjtyt577szg8yjzftkzsq0nqry45lv","bc1q53uv24sjaj93zwtrl30erlgk9jc94sd5saft9q","bc1qvm9skfxh7fl555fn8m69np7fdhrw8tfwwpelly"],["bc1qegauukq63waqctr3fym2l5th0tq9md443qj4pl","bc1qh7x3qhc8sauc90d5qt4ywueusuer4g87kas9r2","bc1qmrewlcd7c7qruz8emwgcg0l3zaa7zt2yl57scj","bc1qfl79qs7az0gnm3kmeqcm3a8u0xel6vwhxp5lg8","bc1qn0trtk8g3u4vqnxkd38f36l7t00m9hdrqe0cqk","bc1q994xtxqcr4d6xdpenga0cs6j4ap2asfnxseatx","bc1q7vrj4f9yt34jgpgncaagd8y8ddc95nl6mrhdz9","bc1q8r4wsa3nye5qypv80vpfg4sh99uf02u5mmh5ry","bc1qq74l3jz88g5uqager9qegcznl345v554nxddgp","bc1qhj7wjgsed7qhx2xwhzvdjgpmwmaglhgfw6ykrs","bc1qyxmhm6wd7rkd5lpwqrc5hyfpeudjw9y7k428uq","bc1qae4cqp6z9h4hawe5ps98j6sndrmy9dmpk4uesl","bc1qrcgpzyjkzhdkm678ady3305csl5t2anp3x7tcu","bc1qq5x0gfkyyhp6wzugcdk7wy37hv0u8xun08p4de","bc1qkpp770v2a6s9klq9mu9c3ws65jcm4ut83ehklq","bc1qk6g8qenn2gtnxk67fhehlut4xgld68k4ljgr2w","bc1q2krn39unesys4k9ps6pfe26rzdlmgsjj07cl0y","bc1qvhccx0r4sxxsy03xltrpsgw2dnfry6e5vheaa0","bc1qqcqqqnc9pp52fn22xc37mkdk7u3s39nn0vrx4v","bc1qmwxly2qx20009gl7dw5a4wwganwr6hsqmhrr63"]]]}</script>
+<script>
+(function () {
+  "use strict";
+  var T;
+  try { T = JSON.parse(document.getElementById("tabla").textContent); } catch (e) { T = null; }
+  var $ = function (id) { return document.getElementById(id); };
+  if (!T || !T.dir) { $("direccion").textContent = "tabla no disponible"; return; }
+
+  var MAX = 2147483647; // 2^31 − 1: mayor índice no endurecido
+  var e = { rama: 0, cuenta: 0, indice: 0, etapa: 0 };
+
+  function miles(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, "."); }
+  function valido(n) { return typeof n === "number" && isFinite(n) && Math.floor(n) === n && n >= 0 && n <= MAX; }
+  function ruta() {
+    var c = valido(e.cuenta) ? e.cuenta : "?", i = valido(e.indice) ? e.indice : "?";
+    return "m/84'/0'/" + c + "'/" + e.rama + "/" + i;
+  }
+  // Solo lo que está en la tabla: fuera de rango, null (nunca se calcula ni se inventa aquí).
+  function direccion() {
+    if (!valido(e.cuenta) || !valido(e.indice)) return null;
+    var c = T.dir[e.cuenta]; if (!c) return null;
+    var r = c[e.rama]; if (!r) return null;
+    return r[e.indice] || null;
+  }
+  function textoDireccion() {
+    if (!valido(e.cuenta) || !valido(e.indice)) return "valor no válido";
+    var d = direccion();
+    return d ? d : "no precalculado";
+  }
+
+  // --- Etapas ---------------------------------------------------------------------------
+  var ETAPAS = [
+    {
+      t: "Semilla BIP-39", m: function () { return "PBKDF2 · 2.048×"; }, s: "semilla de 512 bits", pub: false,
+      titulo: "1. Frase y semilla BIP-39",
+      frontera: "Dentro del núcleo Rust (libx39wallet.so) · secreto",
+      desc: "El motor genera la frase con `bip39::Mnemonic::generate(12)`: 12 palabras, 128 bits de entropía del generador `thread_rng` de la biblioteca `rand` más 4 bits de suma de control. La única lista de palabras compilada es la inglesa, y las pantallas de crear y restaurar trabajan con 12 palabras. La frase se estira con PBKDF2-HMAC-SHA512 hasta una semilla de 64 bytes; la passphrase BIP-39 es la cadena vacía, fija en esta versión.",
+      op: function () { return "PBKDF2-HMAC-SHA512, 2.048 iteraciones"; },
+      en: function () { return "Frase de 12 palabras + sal «mnemonic» (passphrase vacía)"; },
+      sa: function () { return "Semilla de 512 bits (64 bytes), en memoria que se borra al soltarse"; }
+    },
+    {
+      t: "Maestro BIP-32", m: function () { return "HMAC-SHA512 (m)"; }, s: "clave + código de cadena", pub: false,
+      titulo: "2. Clave maestra BIP-32",
+      frontera: "Dentro del núcleo Rust (libx39wallet.so) · secreto",
+      desc: "`Xpriv::new_master` aplica HMAC-SHA512 a la semilla con la clave «Bitcoin seed». Los 256 bits de la izquierda son la clave privada maestra; los 256 de la derecha, el código de cadena. La huella del maestro son los cuatro primeros bytes del HASH160 de su clave pública.",
+      op: function () { return "HMAC-SHA512(clave = «Bitcoin seed», dato = semilla)"; },
+      en: function () { return "Semilla de 64 bytes"; },
+      sa: function () { return "Clave privada maestra (32 bytes) + código de cadena (32 bytes). Huella en el vector: " + T.huella; }
+    },
+    {
+      t: "Ruta endurecida", m: function () { return "m/84'/0'/" + (valido(e.cuenta) ? e.cuenta : "?") + "'"; }, s: "cuenta aislada", pub: false,
+      titulo: "3. Ruta endurecida: propósito, moneda y cuenta",
+      frontera: "Dentro del núcleo Rust (libx39wallet.so) · secreto",
+      desc: "Tres niveles endurecidos (apóstrofo: índice + 2^31): propósito 84', moneda 0' en mainnet y 1' en las redes de prueba, y cuenta 0', la única que usa la billetera. Un nivel endurecido necesita la clave privada del padre, así que desde la clave pública extendida de una cuenta no se llega ni al maestro ni a otra cuenta. De aquí salen los dos descriptores públicos (recepción y cambio) que la billetera guarda en su fichero de estado, sin ninguna clave privada.",
+      op: function () { return "3 × HMAC-SHA512 (derivación privada endurecida)"; },
+      en: function () { return "Clave privada maestra + código de cadena"; },
+      sa: function () { return "Clave extendida de la cuenta m/84'/0'/" + (valido(e.cuenta) ? e.cuenta : "?") + "'"; }
+    },
+    {
+      t: "Derivación hija", m: function () { return "rama " + e.rama + " / índice " + (valido(e.indice) ? e.indice : "?"); }, s: "P = k·G", pub: false,
+      titulo: "4. Derivación hija: rama e índice",
+      frontera: "Dentro del núcleo Rust (libx39wallet.so) · la parte pública no es secreta",
+      desc: "Dos niveles normales, sin apóstrofo: la rama (0 recepción, 1 cambio) y el índice. Los niveles normales se derivan también desde la clave pública extendida de la cuenta; por eso la billetera abierta revela direcciones (`nueva_direccion`) y prepara envíos (`preparar_psbt`) sin la frase, que solo vuelve a entrar para firmar. El escaneo se detiene tras 20 direcciones vacías seguidas (`GAP_LIMIT`).",
+      op: function () { return "2 × HMAC-SHA512 (rama, índice) y P = k·G en secp256k1"; },
+      en: function () { return "Clave extendida de la cuenta"; },
+      sa: function () { return "Clave pública comprimida (33 bytes) de " + ruta(); }
+    },
+    {
+      t: "SegWit y nodo", m: function () { return "bech32 bc1q…"; }, s: "NodeBridge · Electrum", pub: true,
+      titulo: "5. Dirección SegWit y salida hacia el nodo",
+      frontera: "Cruza al nodo · dato público",
+      desc: "El motor calcula el HASH160 de la clave pública y lo codifica en bech32 como testigo de versión 0 (P2WPKH): `bc1q…` en mainnet. Desde aquí el dato es público y sale del aparato: para conocer el historial, el motor pide al servidor Electrum el del script hash de cada dirección. `NodeBridge` decide con qué nodo se habla y comprueba que está sano; la conexión la abre el propio motor (`rust/src/nodo.rs`).",
+      op: function () { return "HASH160 + bech32 (testigo v0); después, historial por script hash"; },
+      en: function () { return "Clave pública comprimida (33 bytes)"; },
+      sa: function () { return textoDireccion(); }
+    }
+  ];
+
+  // Texto con `código` entre acentos graves → nodos de texto y <code>, sin innerHTML.
+  function ponerTexto(el, texto) {
+    el.textContent = "";
+    texto.split("`").forEach(function (trozo, k) {
+      if (k % 2) { var c = document.createElement("code"); c.textContent = trozo; el.appendChild(c); }
+      else el.appendChild(document.createTextNode(trozo));
+    });
+  }
+
+  var flujo = $("flujo"), nodos = [];
+  ETAPAS.forEach(function (et, k) {
+    var li = document.createElement("li"), b = document.createElement("button");
+    b.type = "button"; b.className = "nodo" + (et.pub ? " pub" : "");
+    ["t", "m", "s"].forEach(function (c) { var s = document.createElement("span"); s.className = c; b.appendChild(s); });
+    b.addEventListener("click", function () { e.etapa = k; pintar(); });
+    li.appendChild(b); flujo.appendChild(li); nodos.push(b);
+  });
+
+  // --- Lote -----------------------------------------------------------------------------
+  // Niveles reales de la ruta BIP-84; las cifras salen de aquí, no están escritas a mano.
+  var NIVELES = [
+    { nombre: "propósito", endurecido: true },
+    { nombre: "moneda", endurecido: true },
+    { nombre: "cuenta", endurecido: true },
+    { nombre: "rama", endurecido: false },
+    { nombre: "índice", endurecido: false }
+  ];
+  var PBKDF2 = 2048, MAESTRO = 1;
+  var ENDURECIDOS = NIVELES.filter(function (n) { return n.endurecido; }).length;
+  var RAMA = 1, HIJA = NIVELES.length - ENDURECIDOS - RAMA;
+
+  function pintarLote() {
+    var n = Number($("nLote").value), ok = valido(n) && n >= 1 && n <= 1000000;
+    $("nLoteNota").textContent = ok ? (n === 4000 ? "ejemplo de cálculo" : "") : "escriba un entero entre 1 y 1.000.000";
+    var ids = ["hd-total", "hd-desglose", "hd-copias", "hd-copias-d", "hd-extra", "in-total", "in-desglose", "in-copias", "in-copias-d", "in-extra", "in-extra-d"];
+    if (!ok) { ids.forEach(function (id) { $(id).textContent = id.indexOf("-d") > 0 ? "" : "—"; }); return; }
+    var N = miles(n), porSemilla = PBKDF2 + MAESTRO + ENDURECIDOS + RAMA + HIJA;
+    $("h-hd").textContent = "Una semilla → " + N + (n === 1 ? " dirección" : " direcciones") + " (BIP-32)";
+    $("h-in").textContent = N + (n === 1 ? " semilla independiente" : " semillas independientes") + " (BIP-39)";
+    $("hd-total").textContent = miles(PBKDF2 + MAESTRO + ENDURECIDOS + RAMA + n * HIJA);
+    $("hd-desglose").textContent = miles(PBKDF2) + " (PBKDF2) + " + MAESTRO + " (maestro) + " + ENDURECIDOS + " (niveles endurecidos) + " + RAMA + " (rama) + " + N + " (hijas)";
+    $("hd-copias").textContent = "1 frase";
+    $("hd-copias-d").textContent = "12 palabras recuperan las " + N + (n === 1 ? " dirección" : " direcciones");
+    $("hd-extra").textContent = String(HIJA);
+    $("in-total").textContent = miles(n * porSemilla);
+    $("in-desglose").textContent = N + " × (" + miles(PBKDF2) + " + " + MAESTRO + " + " + ENDURECIDOS + " + " + RAMA + " + " + HIJA + ") = " + N + " × " + miles(porSemilla);
+    $("in-copias").textContent = N + (n === 1 ? " frase" : " frases");
+    $("in-copias-d").textContent = "una por semilla; sin su frase, esa dirección no se recupera";
+    $("in-extra").textContent = miles(porSemilla);
+    $("in-extra-d").textContent = "una semilla nueva completa: PBKDF2 + maestro + ruta";
+  }
+
+  // --- Pintado ---------------------------------------------------------------------------
+  function pintar() {
+    $("ruta").textContent = ruta();
+    var d = direccion();
+    $("direccion").textContent = (d ? d : textoDireccion()) + " [" + T.huella + "]";
+    $("tab0").setAttribute("aria-selected", e.rama === 0 ? "true" : "false");
+    $("tab1").setAttribute("aria-selected", e.rama === 1 ? "true" : "false");
+    ETAPAS.forEach(function (et, k) {
+      var b = nodos[k], h = b.children;
+      h[0].textContent = (k + 1) + ". " + et.t; h[1].textContent = et.m(); h[2].textContent = et.s;
+      if (k === e.etapa) b.setAttribute("aria-current", "step"); else b.removeAttribute("aria-current");
+    });
+    var et = ETAPAS[e.etapa];
+    $("cuenta").textContent = (e.etapa + 1) + " / " + ETAPAS.length;
+    $("anterior").disabled = e.etapa === 0;
+    $("siguiente").disabled = e.etapa === ETAPAS.length - 1;
+    $("d-titulo").textContent = et.titulo;
+    $("d-frontera").textContent = "Frontera: " + et.frontera;
+    $("d-frontera").className = "frontera" + (et.pub ? " pub" : "");
+    ponerTexto($("d-desc"), et.desc);
+    $("d-op").textContent = et.op(); $("d-en").textContent = et.en(); $("d-sa").textContent = et.sa();
+  }
+
+  // --- Mandos ----------------------------------------------------------------------------
+  [["tab0", 0], ["tab1", 1]].forEach(function (p) {
+    $(p[0]).addEventListener("click", function () { e.rama = p[1]; pintar(); });
+  });
+  $("anterior").addEventListener("click", function () { if (e.etapa > 0) { e.etapa--; pintar(); } });
+  $("siguiente").addEventListener("click", function () { if (e.etapa < ETAPAS.length - 1) { e.etapa++; pintar(); } });
+
+  function enlazar(campo, idNumero, idRango) {
+    var num = $(idNumero), rango = $(idRango);
+    rango.addEventListener("input", function () { e[campo] = Number(rango.value); num.value = rango.value; pintar(); });
+    num.addEventListener("input", function () {
+      var v = num.value.trim() === "" ? NaN : Number(num.value);
+      e[campo] = v;
+      if (valido(v)) rango.value = String(Math.min(v, Number(rango.max)));
+      pintar();
+    });
+  }
+  enlazar("cuenta", "nCuenta", "rCuenta");
+  enlazar("indice", "nIndice", "rIndice");
+  $("nLote").addEventListener("input", pintarLote);
+
+  $("versiones").textContent = "bitcoin " + T.bitcoin + " y bip39 " + T.bip39;
+  pintar();
+  pintarLote();
+})();
+</script>
+</body>
+</html>

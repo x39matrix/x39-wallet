@@ -1,0 +1,12 @@
+# Programa auxiliar: tabla de direcciones para docs/arbol-derivacion.html de x39-wallet.
+# Vive en herramientas/arbol-derivacion/. Las versiones son las que fija rust/Cargo.lock
+# (el Cargo.lock de esta carpeta parte de una copia de aquel).
+[package]
+name = "generar-tabla"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+bitcoin = "=0.32.102"
+bip39 = "=2.2.2"
