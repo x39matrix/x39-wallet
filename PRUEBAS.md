@@ -1,5 +1,7 @@
 # PRUEBAS
 
+> Nota de publicación (09/11/2026): las direcciones de la red local que aparecían en este documento y en los tests se han sustituido por direcciones del rango de documentación 192.0.2.0/24 (RFC 5737). Donde una prueba dice que buscó o encontró 192.0.2.x, la prueba real se hizo con la dirección local equivalente.
+
 Procedimientos ejecutados de verdad y sus salidas. Nada de lo que sigue está redactado a
 mano salvo las cabeceras y las notas marcadas; las salidas se copian íntegras. Las únicas
 sustituciones son la ruta del directorio personal por `~` y el nombre de usuario del sistema
