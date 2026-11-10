@@ -110,7 +110,7 @@ se puede comprobar sin pedir permiso a nadie:
 | Fuente | este repositorio, etiqueta `v1.1.0-mainnet`; `android/build-native.lock` fija la suma que `build-native.sh --verificar` debe reproducir |
 | Biblioteca nativa (`libx39wallet.so`, SHA-256) | `244eaa581adbaa822f724c44f5922c627fb96a1488ceca4eaf4580f26bff5a43` |
 | APK que la contiene | `org.x39matrix.llamadas` 1.0.8 (46), SHA-256 `34f382f7a5b0d0645281502afd6e9c30af74cf72e84943bb409bc74369ba6225`, firmado con el certificado `8d46f850509ebfd4778156195c14bb69719dd09f799a4fb661b940e7e2b22fbe` (CN=x39matrix) |
-| Dónde se descarga | repositorio F-Droid propio `https://mining.x39matrix.org/app/fdroid/repo` (huella `8d46f850…`), ficha con hashes y pruebas |
+| Dónde se descarga | repositorio F-Droid propio `https://fdroid.x39matrix.org/app/fdroid/repo` (huella `8d46f850…`), ficha con hashes y pruebas |
 | Prueba de existencia | OpenTimestamps, primer bloque 975174 (09/11/2026), `.ots` junto al APK; sello de tiempo cualificado (RFC 3161, ANF AC Qualified TSA, eIDAS) del 10/11/2026, serie `0xC04082135132D07DCC478923CCBEC7`; ambos verificados contra nuestro propio nodo Bitcoin Core |
 
 ```bash
@@ -149,7 +149,7 @@ replaced again; a wallet restored from the seed alone must scan before anything 
 
 Where it runs and how to check it: the library `libx39wallet.so` (SHA-256 `244eaa58…5a43`) ships inside the published
 APK `org.x39matrix.llamadas` 1.0.8 (46), SHA-256 `34f382f7…6225`, signed with certificate `8d46f850…2fbe`, distributed
-from our own F-Droid repository (`https://mining.x39matrix.org/app/fdroid/repo`), anchored in Bitcoin (first block
+from our own F-Droid repository (`https://fdroid.x39matrix.org/app/fdroid/repo`), anchored in Bitcoin (first block
 975174) and time-stamped by a qualified EU trust service, all verified against our own Bitcoin Core node. Tests and
 their outputs are in `PRUEBAS.md`; the reproducible build in `REPRODUCIBILITY.md`; how addresses are derived and
 what crosses to the node in `docs/arbol-derivacion.html`.
